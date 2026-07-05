@@ -37,6 +37,21 @@ def _cmd_dol_info(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ppc_disasm(args: argparse.Namespace) -> int:
+    from .ppc import decode as ppc_decode
+
+    data = Path(args.file).read_bytes()
+    start = args.offset
+    end = min(len(data), start + args.count * 4) if args.count else len(data)
+    addr = args.address
+    for off in range(start, end - 3, 4):
+        word = int.from_bytes(data[off:off + 4], "big")
+        ins = ppc_decode(word, addr)
+        print(f"{addr:08x}: {word:08x}  {ins.disasm}")
+        addr += 4
+    return 0
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
     report = verify_mod.verify(Path(args.source))
     print(report.render())
@@ -130,6 +145,18 @@ def main(argv: list[str] | None = None) -> int:
         help="parse every recognized file in an extracted dir or ISO and report")
     p.add_argument("source", help="extracted directory or .iso path")
     p.set_defaults(func=_cmd_verify)
+
+    p_ppc = sub.add_parser("ppc", help="PowerPC (Gekko) tools")
+    ppc_sub = p_ppc.add_subparsers(dest="subcommand", required=True)
+    p = ppc_sub.add_parser("disasm", help="disassemble raw big-endian PPC code")
+    p.add_argument("file")
+    p.add_argument("--offset", type=lambda s: int(s, 0), default=0,
+                   help="byte offset into the file to start (default 0)")
+    p.add_argument("--address", type=lambda s: int(s, 0), default=0x80003100,
+                   help="load address of the first instruction")
+    p.add_argument("--count", type=int, default=0,
+                   help="number of instructions (default: to end of file)")
+    p.set_defaults(func=_cmd_ppc_disasm)
 
     p_dol = sub.add_parser("dol", help="DOL executables")
     dol_sub = p_dol.add_subparsers(dest="subcommand", required=True)

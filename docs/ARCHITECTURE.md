@@ -67,6 +67,22 @@ without touching subsystem code.
 - The two paths converge: as decomps finish, recompiled modules can be swapped
   for real source module-by-module, unlocking deeper mods.
 
+### Recompiler status (`gcport.ppc`)
+
+A first slice of the static recompiler lives in the tooling: a PowerPC
+(Gekko/PPC750) instruction **decoder** and a **C-emission back-end** covering
+the common integer, logical, compare, load/store, and branch instructions. It
+emits a C function per routine over a `PpcContext` register file, with
+memory/branch hooks the runtime implements (backed by `gcrt::Memory`).
+Correctness is proven end-to-end: a test recompiles a hand-assembled loop,
+compiles the emitted C with the host compiler, runs it, and checks the result.
+
+Not yet handled (and emitted as explicit `ppc_unimplemented` traps rather than
+wrong code): floating point, Gekko paired-singles (SIMD), and supervisor
+instructions. Function discovery, the address→function dispatch table, and
+feeding real `main.dol` code through it are the next steps — the first of those
+that needs a user-supplied dump.
+
 ## Where "DLC" fits
 
 Content mods (new tracks, characters) are asset-level: unpack archive → replace/add

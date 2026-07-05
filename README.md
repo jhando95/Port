@@ -53,6 +53,8 @@ gcport verify game.iso        # (works directly on an ISO too)
 gcport dol info extracted/sys/main.dol
 gcport yaz0 decompress file.szs file.arc
 
+gcport ppc disasm extracted/sys/main.dol --offset 0x100 --count 40   # PowerPC
+
 gcport rarc list extracted/files/Course/Luigi.arc
 gcport rarc extract extracted/files/Course/Luigi.arc -o luigi/
 gcport rarc create luigi/ -o Luigi.arc        # add --yaz0 for .szs
