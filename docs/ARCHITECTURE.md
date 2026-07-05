@@ -1,0 +1,72 @@
+# Architecture: GameCube → native PC pipeline
+
+## Overview
+
+```
+your disc dump (game.iso)
+        │
+        ├── gcport iso extract ──────────► extracted/sys/main.dol   (game code)
+        │                                  extracted/files/**       (game assets)
+        │
+        ├── static recompiler (DolRecomp / GCRecomp, external) ──► game logic as C/Rust
+        │                                                          compiled for x86-64
+        │
+        └────────────────────────────┐
+                                     ▼
+        recompiled game logic  +  gcrt runtime (this repo)  =  native executable
+                                     ▲
+                     assets loaded via gcrt DVD layer from extracted/files/
+```
+
+The GameCube's CPU code calls into Nintendo's SDK libraries (Dolphin OS, DVD,
+PAD, VI, GX, AX, CARD…). On console those talk to hardware. In a native port,
+**gcrt** provides the same interfaces backed by PC facilities. The recompiled
+game code doesn't know the difference.
+
+## gcrt subsystems
+
+| GameCube API | gcrt implementation | Status |
+|---|---|---|
+| OS (time, arenas, threads, reports) | `std::chrono`, malloc-backed arenas, host threads | skeleton |
+| DVD (async file reads by path/entrynum) | reads from the extracted asset directory, FST-compatible path resolution | skeleton |
+| PAD (controllers) | HAL input backend (SDL gamepad later; null backend now) | skeleton |
+| VI (video timing, retrace callbacks) | 59.94 Hz frame pacing, retrace callback dispatch | skeleton |
+| GX (GPU command interface) | translation to modern GL/Vulkan — the largest work item | not started |
+| AX/DSP (audio) | mixer → host audio out | not started |
+| CARD (memory card) | save files on disk | not started |
+
+The HAL (`gcrt::Hal`) isolates everything platform-facing (window, input,
+audio, time) behind one interface. The `NullHal` backend lets the whole
+runtime build and test headlessly in CI; an SDL backend slots in later
+without touching subsystem code.
+
+## Why static recompilation first (not decompilation)
+
+- Double Dash's decomp is ~35% matched; Melee's ~75%. A decomp-based port needs
+  ~100% (or at least all-linkable). That's years away for MKDD.
+- A static recompiler translates the *entire* binary today. The port quality then
+  depends on the runtime — which is exactly what we control here.
+- The two paths converge: as decomps finish, recompiled modules can be swapped
+  for real source module-by-module, unlocking deeper mods.
+
+## Where "DLC" fits
+
+Content mods (new tracks, characters) are asset-level: unpack archive → replace/add
+assets → rebuild. `gcport iso build` already closes that loop for disc images
+(usable with Dolphin immediately). In the native port, the DVD layer reads loose
+files, so DLC becomes literally "drop files in a directory" plus a small manifest —
+no ISO rebuilding at all. Code-level mods ride on the recompiled code's function
+boundaries (hook tables), same model N64Recomp ports use.
+
+## Format notes
+
+- **GCM/ISO**: 0x440-byte boot header (game ID, DVD magic `0xC2339F3D` at 0x1C,
+  DOL/FST offsets at 0x420/0x424), bi2 at 0x440, apploader at 0x2440, then DOL,
+  FST, and file data. FST is 12-byte entries (flag+name offset, offset/parent,
+  length/next) + string table.
+- **DOL**: 0x100-byte header; 7 text + 11 data sections (file offset, load
+  address, size triplets), BSS address/size, entry point. All big-endian.
+- **Yaz0**: RLE/LZ back-reference scheme, magic `Yaz0`, used to compress many
+  first-party archives (`.szs`).
+- **RARC/ARC** (Nintendo archive format used heavily by MKDD): planned next —
+  will be verified against a real dump before landing.

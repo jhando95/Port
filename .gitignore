@@ -1,0 +1,16 @@
+# Never commit game dumps or extracted game data — see ROADMAP.md ground rules.
+*.iso
+*.gcm
+*.rvz
+*.dol
+*.szs
+*.arc
+extracted/
+dumps/
+
+# Build artifacts
+runtime/build/
+__pycache__/
+*.egg-info/
+.pytest_cache/
+dist/
