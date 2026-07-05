@@ -103,9 +103,19 @@ compares it to the recompiler's `RUNTIME_HEADER`. An integration test
 recompiles a memory-using program at build time, links it against the real
 runtime, runs it, and checks the effect in guest memory (`r5 == 84`, and
 `0x80003000` holds the stored value) — the two halves of the project proven to
-connect. Function discovery (finding routine boundaries in a real `main.dol`)
-and feeding the game's own code through this path are the next steps — the
-first that needs a user-supplied dump.
+connect.
+
+**Whole-program recompilation.** `recompile_program` (CLI: `gcport ppc
+recompile`) carves a code blob into functions — seeding entry points from the
+blob start, caller-supplied entries, and every internal `bl` target — and emits
+a translation unit with each function plus a `ppc_register_all` that populates
+the dispatch table. Internal calls become `ppc_call` hooks that route through
+that table. A second integration test recompiles a two-function program where
+`main` calls a subroutine and returns 43, proving discovery + dispatch +
+inter-function calls compose. The boundary heuristic (contiguous functions
+delimited by call targets) is what a recompiler uses without symbols; a real
+port refines it with the DOL symbol map and padding detection — the first step
+that needs a user-supplied dump.
 
 ## Where "DLC" fits
 

@@ -80,6 +80,12 @@ void ppc_write_float (PpcContext*, uint32_t ea, float v);
 void ppc_write_double(PpcContext*, uint32_t ea, double v);
 void ppc_call(PpcContext*, uint32_t target);
 void ppc_unimplemented(PpcContext*, uint32_t address, uint32_t raw);
+
+/* Recompiled translation units call this (via their generated
+   ppc_register_all) to register each function at its guest address so
+   ppc_call() can dispatch between them. Implemented by the runtime bridge. */
+typedef void (*PpcFunctionPtr)(PpcContext*);
+void ppc_register_function(uint32_t address, PpcFunctionPtr fn);
 #ifdef __cplusplus
 }
 #endif

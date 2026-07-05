@@ -52,6 +52,30 @@ def _cmd_ppc_disasm(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_ppc_recompile(args: argparse.Namespace) -> int:
+    from .ppc import discover_functions, recompile_program
+
+    data = Path(args.file).read_bytes()
+    start = args.offset
+    end = start + args.size if args.size else len(data)
+    code = data[start:end - ((end - start) % 4)]
+    entries = [int(e, 0) for e in args.entry] if args.entry else []
+    if args.list_functions:
+        funcs = discover_functions(code, args.address, entries)
+        for addr, size in funcs:
+            print(f"{addr:08x}  {size:>6} bytes")
+        print(f"{len(funcs)} functions")
+        return 0
+    out = recompile_program(code, args.address, entries)
+    if args.output:
+        Path(args.output).write_text(out)
+        print(f"wrote {args.output} "
+              f"({len(discover_functions(code, args.address, entries))} functions)")
+    else:
+        print(out)
+    return 0
+
+
 def _cmd_verify(args: argparse.Namespace) -> int:
     report = verify_mod.verify(Path(args.source))
     print(report.render())
@@ -157,6 +181,22 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--count", type=int, default=0,
                    help="number of instructions (default: to end of file)")
     p.set_defaults(func=_cmd_ppc_disasm)
+
+    p = ppc_sub.add_parser("recompile",
+                           help="recompile a code blob to a C translation unit")
+    p.add_argument("file")
+    p.add_argument("--offset", type=lambda s: int(s, 0), default=0,
+                   help="byte offset into the file where code starts")
+    p.add_argument("--size", type=lambda s: int(s, 0), default=0,
+                   help="bytes of code to recompile (default: to end of file)")
+    p.add_argument("--address", type=lambda s: int(s, 0), default=0x80003100,
+                   help="load address of the first instruction")
+    p.add_argument("--entry", action="append",
+                   help="additional known entry-point address (repeatable)")
+    p.add_argument("--list-functions", action="store_true",
+                   help="just list discovered functions, do not emit C")
+    p.add_argument("-o", "--output", help="write C to this file (default stdout)")
+    p.set_defaults(func=_cmd_ppc_recompile)
 
     p_dol = sub.add_parser("dol", help="DOL executables")
     dol_sub = p_dol.add_subparsers(dest="subcommand", required=True)

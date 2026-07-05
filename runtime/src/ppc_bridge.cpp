@@ -73,4 +73,10 @@ void ppc_unimplemented(PpcContext*, uint32_t address, uint32_t raw) {
                  "gcrt: unimplemented at %08x (raw %08x)\n", address, raw);
 }
 
+// C-linkage entry point recompiled translation units call from their generated
+// ppc_register_all() to populate the dispatch table.
+void ppc_register_function(uint32_t address, PpcFunctionPtr fn) {
+    gcrt::PpcRegisterFunction(address, fn);  // identical signatures
+}
+
 }  // extern "C"

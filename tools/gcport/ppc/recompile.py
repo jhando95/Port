@@ -96,6 +96,12 @@ void ppc_write_float (PpcContext*, uint32_t ea, float v);
 void ppc_write_double(PpcContext*, uint32_t ea, double v);
 void ppc_call(PpcContext*, uint32_t target);
 void ppc_unimplemented(PpcContext*, uint32_t address, uint32_t raw);
+
+/* Recompiled translation units call this (via their generated
+   ppc_register_all) to register each function at its guest address so
+   ppc_call() can dispatch between them. Implemented by the runtime bridge. */
+typedef void (*PpcFunctionPtr)(PpcContext*);
+void ppc_register_function(uint32_t address, PpcFunctionPtr fn);
 #ifdef __cplusplus
 }
 #endif
@@ -438,3 +444,63 @@ def _emit_branch(insn: Instruction, base: int, end: int,
     if internal:
         return [f"goto {_label(target)};"]
     return [f"ppc_call(c, 0x{target:08x}u);", "return;"]
+
+
+def discover_functions(code: bytes, base_address: int,
+                       extra_entries=()) -> list[tuple[int, int]]:
+    """Split a code blob into (entry_address, size_in_bytes) functions.
+
+    Entry points are seeded from the blob start, any explicitly-provided
+    entries, and every internal ``bl`` target (a call implies a function
+    there). Functions are taken to be contiguous, each spanning from its
+    entry to the next entry (or the blob end). This matches how a simple
+    recompiler carves up code without a symbol table; a real port refines
+    the boundaries with the DOL symbol map and padding detection.
+    """
+    if len(code) % 4 != 0:
+        raise ValueError("code length must be a multiple of 4")
+    count = len(code) // 4
+    end = base_address + len(code)
+
+    entries = {base_address}
+    for e in extra_entries:
+        if base_address <= e < end and (e - base_address) % 4 == 0:
+            entries.add(e)
+    for i in range(count):
+        word = int.from_bytes(code[i * 4:i * 4 + 4], "big")
+        ins = decode(word, base_address + i * 4)
+        if ins.is_call and ins.target is not None:
+            if base_address <= ins.target < end:
+                entries.add(ins.target)
+
+    ordered = sorted(entries)
+    functions = []
+    for i, start in enumerate(ordered):
+        stop = ordered[i + 1] if i + 1 < len(ordered) else end
+        functions.append((start, stop - start))
+    return functions
+
+
+def function_name(address: int, prefix: str = "func_") -> str:
+    return f"{prefix}{address:08x}"
+
+
+def recompile_program(code: bytes, base_address: int, extra_entries=(),
+                      prefix: str = "func_") -> str:
+    """Recompile a whole code blob: emit every discovered function plus a
+    ``ppc_register_all`` that registers each with the runtime dispatch table.
+    """
+    functions = discover_functions(code, base_address, extra_entries)
+    parts = ['#include "gcrt/ppc_runtime.h"\n']
+    registrations = []
+    for start, size in functions:
+        offset = start - base_address
+        name = function_name(start, prefix)
+        parts.append(recompile_function(code[offset:offset + size], start, name))
+        parts.append("")
+        registrations.append(f"    ppc_register_function(0x{start:08x}u, {name});")
+
+    parts.append("void ppc_register_all(void) {")
+    parts.extend(registrations)
+    parts.append("}")
+    return "\n".join(parts)

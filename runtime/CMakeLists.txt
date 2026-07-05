@@ -81,6 +81,22 @@ if(PYTHON3)
     target_link_libraries(gcrt_ppc_bridge_test PRIVATE gcrt)
     add_test(NAME ppc_bridge COMMAND gcrt_ppc_bridge_test)
 
+    # Whole-program recompilation: multi-function program with dispatch.
+    set(GENERATED_PROGRAM "${CMAKE_CURRENT_BINARY_DIR}/recomp_multi.c")
+    add_custom_command(
+        OUTPUT ${GENERATED_PROGRAM}
+        COMMAND ${PYTHON3}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_program.py"
+            ${GENERATED_PROGRAM}
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_program.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/gcport/ppc/recompile.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/gcport/ppc/decode.py"
+        COMMENT "Recompiling multi-function PPC program to C")
+    add_executable(gcrt_ppc_program_test
+        tests/ppc_program_test.cpp ${GENERATED_PROGRAM})
+    target_link_libraries(gcrt_ppc_program_test PRIVATE gcrt)
+    add_test(NAME ppc_program COMMAND gcrt_ppc_program_test)
+
     # Guard: the committed ppc_runtime.h must match the recompiler's output.
     add_test(NAME ppc_header_drift COMMAND ${PYTHON3}
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_header.py"

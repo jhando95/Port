@@ -12,4 +12,9 @@ unknown instructions emit an explicit trap rather than wrong code.
 """
 
 from .decode import Instruction, decode, disassemble  # noqa: F401
-from .recompile import RUNTIME_HEADER, recompile_function  # noqa: F401
+from .recompile import (  # noqa: F401
+    RUNTIME_HEADER,
+    discover_functions,
+    recompile_function,
+    recompile_program,
+)

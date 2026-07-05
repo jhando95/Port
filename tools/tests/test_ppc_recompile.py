@@ -7,7 +7,12 @@ import subprocess
 
 import pytest
 
-from gcport.ppc import RUNTIME_HEADER, recompile_function
+from gcport.ppc import (
+    RUNTIME_HEADER,
+    discover_functions,
+    recompile_function,
+    recompile_program,
+)
 
 
 def assemble(words):
@@ -44,6 +49,38 @@ def test_unimplemented_is_explicit():
     code = assemble([0xFC20102C, 0x4E800020])  # fsqrt f1, f2
     c = recompile_function(code, 0, "f")
     assert "ppc_unimplemented(c" in c
+
+
+def test_discover_functions_from_call_targets():
+    # main at 0x100 calls a function at 0x110; two functions expected
+    program = assemble([
+        0x38600000,  # 0x100 li r3, 0
+        0x4800000D,  # 0x104 bl 0x110
+        0x38630001,  # 0x108 addi r3, r3, 1
+        0x4E800020,  # 0x10c blr
+        0x3860002A,  # 0x110 li r3, 42
+        0x4E800020,  # 0x114 blr
+    ])
+    funcs = discover_functions(program, 0x100)
+    assert funcs == [(0x100, 16), (0x110, 8)]
+
+
+def test_discover_honors_extra_entries():
+    program = assemble([0x38600001, 0x4E800020, 0x38600002, 0x4E800020])
+    # no calls; but caller knows 0x108 is an entry (e.g. from a symbol table)
+    funcs = discover_functions(program, 0x100, extra_entries=[0x108])
+    assert funcs == [(0x100, 8), (0x108, 8)]
+
+
+def test_recompile_program_emits_functions_and_registration():
+    program = assemble([0x48000011, 0x4E800020, 0x60000000, 0x60000000,
+                        0x3860002A, 0x4E800020])  # bl +0x10 -> 0x80003110
+    c = recompile_program(program, 0x80003100)
+    assert "void func_80003100(PpcContext* c)" in c
+    assert "void func_80003110(PpcContext* c)" in c
+    assert "void ppc_register_all(void)" in c
+    assert "ppc_register_function(0x80003100u, func_80003100);" in c
+    assert "ppc_register_function(0x80003110u, func_80003110);" in c
 
 
 def _cc():
