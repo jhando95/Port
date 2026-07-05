@@ -3,9 +3,16 @@
 #define GCRT_PPC_RUNTIME_H
 #include <stdint.h>
 
+/* An FPR holds a double for scalar ops; the u64 view gives bit-accurate
+   access for the integer-convert instructions (fctiw/fctiwz + stfiwx). */
+typedef union PpcFpr {
+    double   f64;
+    uint64_t u64;
+} PpcFpr;
+
 typedef struct PpcContext {
     uint32_t gpr[32];
-    double   fpr[32];   /* GameCube FPRs hold doubles; singles round via cast */
+    PpcFpr   fpr[32];   /* singles round via (double)(float) casts */
     uint32_t lr;
     uint32_t ctr;
     uint32_t cr;   /* 8 condition fields, PowerPC bit order (bit0 = MSB) */
@@ -41,6 +48,18 @@ static inline void ppc_fcmp(PpcContext* c, int f, double a, double b) {
     uint32_t clear = ~(0xFu << (28 - base));
     c->cr = (c->cr & clear) |
             ((lt << 3 | gt << 2 | eq << 1 | un) << (28 - base));
+}
+
+/* Double -> 32-bit integer conversions for fctiwz (truncate) and fctiw
+   (round to nearest), with the out-of-range/NaN clamping PowerPC specifies. */
+static inline uint32_t ppc_d2iz(double v) {
+    if (v != v) return 0x80000000u;             /* NaN */
+    if (v >= 2147483647.0) return 0x7fffffffu;
+    if (v <= -2147483648.0) return 0x80000000u;
+    return (uint32_t)(int32_t)v;                /* truncate toward zero */
+}
+static inline uint32_t ppc_d2i(double v) {
+    return ppc_d2iz(__builtin_nearbyint(v));    /* current rounding (nearest) */
 }
 
 /* Memory + control hooks the host runtime implements (backed by gcrt::Memory

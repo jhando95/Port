@@ -139,7 +139,7 @@ void ppc_write_u32(PpcContext* c, uint32_t e, uint32_t v) {{ (void)c;(void)e;(vo
 void ppc_call(PpcContext* c, uint32_t t) {{ (void)c;(void)t; }}
 void ppc_unimplemented(PpcContext* c, uint32_t a, uint32_t r) {{ (void)c;(void)a;(void)r; }}
 int main(void) {{
-    PpcContext c; for (int i=0;i<32;++i){{c.gpr[i]=0;c.fpr[i]=0;}}
+    PpcContext c; for (int i=0;i<32;++i){{c.gpr[i]=0;c.fpr[i].f64=0;}}
     c.lr=c.ctr=c.cr=c.xer=0;
     c.gpr[3] = 0x100;
     ppc_write_float(&c, 0x100, 1.5f);
@@ -156,6 +156,83 @@ int main(void) {{
                         "-o", str(exe)], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert subprocess.run([str(exe)]).returncode == 0
+
+
+def _run_memory_program(tmp_path, words, check_gpr, expected):
+    """Compile a recompiled program with a MEM-backed harness; return the exit
+    code of a check that `c.gpr[check_gpr] == expected`."""
+    func = recompile_function(assemble(words), 0, "run")
+    (tmp_path / "ppc_runtime.h").write_text(RUNTIME_HEADER)
+    harness = f"""
+#include "ppc_runtime.h"
+#include <string.h>
+static uint8_t MEM[0x10000];
+{func}
+float ppc_read_float(PpcContext* c, uint32_t e) {{ (void)c; e&=0xffff;
+    uint32_t b=((uint32_t)MEM[e]<<24)|((uint32_t)MEM[e+1]<<16)|
+              ((uint32_t)MEM[e+2]<<8)|MEM[e+3]; float f; memcpy(&f,&b,4); return f; }}
+void ppc_write_float(PpcContext* c, uint32_t e, float v) {{ (void)c; e&=0xffff;
+    uint32_t b; memcpy(&b,&v,4);
+    MEM[e]=b>>24; MEM[e+1]=b>>16; MEM[e+2]=b>>8; MEM[e+3]=b; }}
+double ppc_read_double(PpcContext* c, uint32_t e) {{ (void)c;(void)e; return 0; }}
+void ppc_write_double(PpcContext* c, uint32_t e, double v) {{ (void)c;(void)e;(void)v; }}
+uint8_t ppc_read_u8(PpcContext* c, uint32_t e) {{ (void)c; return MEM[e&0xffff]; }}
+uint16_t ppc_read_u16(PpcContext* c, uint32_t e) {{ (void)c; e&=0xffff;
+    return (uint16_t)((MEM[e]<<8)|MEM[e+1]); }}
+uint32_t ppc_read_u32(PpcContext* c, uint32_t e) {{ (void)c; e&=0xffff;
+    return ((uint32_t)MEM[e]<<24)|((uint32_t)MEM[e+1]<<16)|
+           ((uint32_t)MEM[e+2]<<8)|MEM[e+3]; }}
+void ppc_write_u8(PpcContext* c, uint32_t e, uint8_t v) {{ (void)c; MEM[e&0xffff]=v; }}
+void ppc_write_u16(PpcContext* c, uint32_t e, uint16_t v) {{ (void)c; e&=0xffff;
+    MEM[e]=v>>8; MEM[e+1]=v; }}
+void ppc_write_u32(PpcContext* c, uint32_t e, uint32_t v) {{ (void)c; e&=0xffff;
+    MEM[e]=v>>24; MEM[e+1]=v>>16; MEM[e+2]=v>>8; MEM[e+3]=v; }}
+void ppc_call(PpcContext* c, uint32_t t) {{ (void)c;(void)t; }}
+void ppc_unimplemented(PpcContext* c, uint32_t a, uint32_t r) {{ (void)c;(void)a;(void)r; }}
+int main(void) {{
+    PpcContext c; for (int i=0;i<32;++i){{c.gpr[i]=0;c.fpr[i].f64=0;}}
+    c.lr=c.ctr=c.cr=c.xer=0;
+    c.gpr[3] = 0x100;
+    ppc_write_float(&c, 0x100, 3.75f);
+    run(&c);
+    return c.gpr[{check_gpr}] == {expected} ? 0 : 1;
+}}
+"""
+    src = tmp_path / "harness.c"
+    src.write_text(harness)
+    exe = tmp_path / "harness"
+    r = subprocess.run([_cc(), "-std=c11", "-I", str(tmp_path), str(src),
+                        "-o", str(exe)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return subprocess.run([str(exe)]).returncode
+
+
+@pytest.mark.skipif(_cc() is None, reason="no C compiler available")
+def test_end_to_end_float_to_int(tmp_path):
+    """lfs 3.75 -> fctiwz (truncates to 3) -> stfiwx -> lwz; expect r6 == 3."""
+    rc = _run_memory_program(tmp_path, [
+        0xC0230000,  # lfs   f1, 0(r3)     ; 3.75
+        0xFC40081E,  # fctiwz f2, f1        ; -> 3
+        0x38A00008,  # li    r5, 8
+        0x7C432FAE,  # stfiwx f2, r3, r5    ; store int at r3+8
+        0x80C30008,  # lwz   r6, 8(r3)
+        0x4E800020,  # blr
+    ], check_gpr=6, expected=3)
+    assert rc == 0
+
+
+@pytest.mark.skipif(_cc() is None, reason="no C compiler available")
+def test_end_to_end_indexed(tmp_path):
+    """stwx then lwzx through an index register; expect r6 == 99."""
+    rc = _run_memory_program(tmp_path, [
+        0x38600200,  # li   r3, 0x200
+        0x38800004,  # li   r4, 4
+        0x38A00063,  # li   r5, 99
+        0x7CA3212E,  # stwx r5, r3, r4      ; MEM[0x204] = 99
+        0x7CC3202E,  # lwzx r6, r3, r4      ; r6 = 99
+        0x4E800020,  # blr
+    ], check_gpr=6, expected=99)
+    assert rc == 0
 
 
 @pytest.mark.skipif(_cc() is None, reason="no C compiler available")

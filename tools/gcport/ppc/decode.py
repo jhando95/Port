@@ -32,6 +32,7 @@ class Instruction:
     src_a: int | None = None
     src_b: int | None = None
     src_c: int | None = None  # FP multiply-add third operand (frC)
+    index: int | None = None  # X-form indexed load/store index GPR (rB)
     is_float: bool = False    # dest/srcs name FPRs, not GPRs
 
     # Immediates.
@@ -374,9 +375,37 @@ _X_OPS = {
 }
 
 
+# X-form indexed load/store (opcode 31). (name, is_store, is_float)
+_X_MEM = {
+    23: ("lwzx", False, False), 87: ("lbzx", False, False),
+    279: ("lhzx", False, False), 343: ("lhax", False, False),
+    151: ("stwx", True, False), 215: ("stbx", True, False),
+    407: ("sthx", True, False),
+    535: ("lfsx", False, True), 599: ("lfdx", False, True),
+    663: ("stfsx", True, True), 727: ("stfdx", True, True),
+    983: ("stfiwx", True, True),
+}
+
+
 def _decode_x_form(word, address, f1, f2, f3, rc) -> Instruction:
     insn = Instruction(address=address, raw=word)
     xo = (word >> 1) & 0x3FF
+
+    mem = _X_MEM.get(xo)
+    if mem is not None:
+        name, is_store, is_float = mem
+        insn.mnemonic = name
+        insn.is_float = is_float
+        insn.src_a = f2      # base GPR (rA); 0 means literal 0
+        insn.index = f3      # index GPR (rB)
+        reg = f"f{f1}" if is_float else f"r{f1}"
+        if is_store:
+            insn.src_b = f1  # value register (rS / frS)
+        else:
+            insn.dest = f1
+        insn.operands = [reg, f"r{f2}", f"r{f3}"]
+        return insn
+
     entry = _X_OPS.get(xo)
     if entry is None:
         insn.mnemonic = ".word"

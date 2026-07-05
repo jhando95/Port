@@ -147,6 +147,24 @@ def test_fp_unary_and_compare():
     assert ins.src_a == 1 and ins.src_b == 2 and ins.crf == 0
 
 
+def test_fp_convert():
+    ins = d(0xFC40081E)  # fctiwz f2, f1
+    assert ins.mnemonic == "fctiwz" and ins.is_float
+    assert ins.dest == 2 and ins.src_b == 1
+
+
+def test_indexed_memory():
+    ins = d(0x7CC3202E)  # lwzx r6, r3, r4
+    assert ins.mnemonic == "lwzx"
+    assert ins.dest == 6 and ins.src_a == 3 and ins.index == 4
+    ins = d(0x7CA3212E)  # stwx r5, r3, r4
+    assert ins.mnemonic == "stwx"
+    assert ins.src_b == 5 and ins.src_a == 3 and ins.index == 4
+    ins = d(0x7C432FAE)  # stfiwx f2, r3, r5
+    assert ins.mnemonic == "stfiwx" and ins.is_float
+    assert ins.src_b == 2 and ins.src_a == 3 and ins.index == 5
+
+
 def test_paired_single_disassembles():
     # ps_add f1, f2, f3 (opcode 4, xo 21) -> decoded but emission is a trap
     word = (4 << 26) | (1 << 21) | (2 << 16) | (3 << 11) | (21 << 1)

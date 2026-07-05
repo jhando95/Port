@@ -28,7 +28,7 @@ int main() {
     PpcContext ctx;
     for (int i = 0; i < 32; ++i) {
         ctx.gpr[i] = 0;
-        ctx.fpr[i] = 0.0;
+        ctx.fpr[i].f64 = 0.0;
     }
     ctx.lr = ctx.ctr = ctx.cr = ctx.xer = 0;
 
@@ -47,7 +47,7 @@ int main() {
     PpcContext ctx2;
     for (int i = 0; i < 32; ++i) {
         ctx2.gpr[i] = 0;
-        ctx2.fpr[i] = 0.0;
+        ctx2.fpr[i].f64 = 0.0;
     }
     ctx2.lr = ctx2.ctr = ctx2.cr = ctx2.xer = 0;
     ppc_call(&ctx2, 0x80003100);

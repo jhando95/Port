@@ -19,9 +19,16 @@ RUNTIME_HEADER = r"""/* gcrt PowerPC recompiler runtime contract (generated). */
 #define GCRT_PPC_RUNTIME_H
 #include <stdint.h>
 
+/* An FPR holds a double for scalar ops; the u64 view gives bit-accurate
+   access for the integer-convert instructions (fctiw/fctiwz + stfiwx). */
+typedef union PpcFpr {
+    double   f64;
+    uint64_t u64;
+} PpcFpr;
+
 typedef struct PpcContext {
     uint32_t gpr[32];
-    double   fpr[32];   /* GameCube FPRs hold doubles; singles round via cast */
+    PpcFpr   fpr[32];   /* singles round via (double)(float) casts */
     uint32_t lr;
     uint32_t ctr;
     uint32_t cr;   /* 8 condition fields, PowerPC bit order (bit0 = MSB) */
@@ -57,6 +64,18 @@ static inline void ppc_fcmp(PpcContext* c, int f, double a, double b) {
     uint32_t clear = ~(0xFu << (28 - base));
     c->cr = (c->cr & clear) |
             ((lt << 3 | gt << 2 | eq << 1 | un) << (28 - base));
+}
+
+/* Double -> 32-bit integer conversions for fctiwz (truncate) and fctiw
+   (round to nearest), with the out-of-range/NaN clamping PowerPC specifies. */
+static inline uint32_t ppc_d2iz(double v) {
+    if (v != v) return 0x80000000u;             /* NaN */
+    if (v >= 2147483647.0) return 0x7fffffffu;
+    if (v <= -2147483648.0) return 0x80000000u;
+    return (uint32_t)(int32_t)v;                /* truncate toward zero */
+}
+static inline uint32_t ppc_d2i(double v) {
+    return ppc_d2iz(__builtin_nearbyint(v));    /* current rounding (nearest) */
 }
 
 /* Memory + control hooks the host runtime implements (backed by gcrt::Memory
@@ -103,7 +122,18 @@ def _base_expr(reg: int | None, disp: int) -> str:
 
 
 def _fpr(n: int) -> str:
-    return f"c->fpr[{n}]"
+    return f"c->fpr[{n}].f64"
+
+
+def _fpr_bits(n: int) -> str:
+    return f"c->fpr[{n}].u64"
+
+
+def _base_indexed(base: int | None, index: int) -> str:
+    """Effective address for X-form indexed access: (rA|0) + rB."""
+    if not base:  # rA == 0 -> base is literally 0
+        return _gpr(index)
+    return f"({_gpr(base)} + {_gpr(index)})"
 
 
 # base mnemonic -> C expression template with {A}{B}{C} FPR placeholders
@@ -137,6 +167,34 @@ def _emit_fp(insn: Instruction) -> list[str]:
                 f"(float){_fpr(b)});"]
     if m in ("stfd", "stfdu"):
         return [f"ppc_write_double(c, {_base_expr(a, insn.disp)}, {_fpr(b)});"]
+
+    # X-form indexed FP load/store
+    if m in ("lfsx",):
+        return [f"{_fpr(d)} = (double)ppc_read_float(c, "
+                f"{_base_indexed(a, insn.index)});"]
+    if m in ("lfdx",):
+        return [f"{_fpr(d)} = ppc_read_double(c, "
+                f"{_base_indexed(a, insn.index)});"]
+    if m in ("stfsx",):
+        return [f"ppc_write_float(c, {_base_indexed(a, insn.index)}, "
+                f"(float){_fpr(b)});"]
+    if m in ("stfdx",):
+        return [f"ppc_write_double(c, {_base_indexed(a, insn.index)}, "
+                f"{_fpr(b)});"]
+    if m == "stfiwx":  # store the low 32 bits (the fctiwz result) to memory
+        return [f"ppc_write_u32(c, {_base_indexed(a, insn.index)}, "
+                f"(uint32_t){_fpr_bits(b)});"]
+
+    # integer-convert: result lives in the low word of the FPR
+    if m == "fctiwz":
+        return [f"{_fpr_bits(d)} = (uint64_t)ppc_d2iz({_fpr(insn.src_b)});"]
+    if m == "fctiw":
+        return [f"{_fpr_bits(d)} = (uint64_t)ppc_d2i({_fpr(insn.src_b)});"]
+    # reciprocal / reciprocal-sqrt estimates (single/double)
+    if m == "fres":
+        return [f"{_fpr(d)} = (double)(1.0f / (float){_fpr(a)});"]
+    if m == "frsqrte":
+        return [f"{_fpr(d)} = 1.0 / __builtin_sqrt({_fpr(a)});"]
 
     if m in _FP_ARITH:
         expr = _FP_ARITH[m].format(
@@ -260,6 +318,23 @@ def _emit_one(insn: Instruction) -> list[str]:
                  f"(uint16_t){_gpr(b)});"]
     elif m in ("stb", "stbu"):
         stmts = [f"ppc_write_u8(c, {_base_expr(a, insn.disp)}, "
+                 f"(uint8_t){_gpr(b)});"]
+    elif m == "lwzx":
+        stmts = [f"{_gpr(d)} = ppc_read_u32(c, {_base_indexed(a, insn.index)});"]
+    elif m == "lhzx":
+        stmts = [f"{_gpr(d)} = ppc_read_u16(c, {_base_indexed(a, insn.index)});"]
+    elif m == "lhax":
+        stmts = [f"{_gpr(d)} = (uint32_t)(int32_t)(int16_t)"
+                 f"ppc_read_u16(c, {_base_indexed(a, insn.index)});"]
+    elif m == "lbzx":
+        stmts = [f"{_gpr(d)} = ppc_read_u8(c, {_base_indexed(a, insn.index)});"]
+    elif m == "stwx":
+        stmts = [f"ppc_write_u32(c, {_base_indexed(a, insn.index)}, {_gpr(b)});"]
+    elif m == "sthx":
+        stmts = [f"ppc_write_u16(c, {_base_indexed(a, insn.index)}, "
+                 f"(uint16_t){_gpr(b)});"]
+    elif m == "stbx":
+        stmts = [f"ppc_write_u8(c, {_base_indexed(a, insn.index)}, "
                  f"(uint8_t){_gpr(b)});"]
     elif m in ("cmpwi", "cmpw"):
         rhs = f"(int32_t){insn.simm}" if m == "cmpwi" else f"(int32_t){_gpr(b)}"

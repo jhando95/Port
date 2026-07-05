@@ -83,10 +83,17 @@ load/store (`lfs`/`lfd`/`stfs`/`stfd`), the arithmetic and multiply-add family
 rounding), `fmr`/`fneg`/`fabs`/`frsp`/`fsel`, and `fcmpu`/`fcmpo`. A second
 gcc-backed end-to-end test computes a real float sum through the emitted code.
 
-Still emitted as explicit `ppc_unimplemented` traps (not wrong code): the
-integer-convert and estimate ops (`fctiwz`, `fres`, `frsqrte`, `fsqrt`) that
-need a bit-accurate FPR model, Gekko's paired-singles (decoded for
-disassembly but not emitted), and supervisor instructions.
+FPRs are modeled as a `double`/`uint64_t` union, which gives the bit-accurate
+access the integer-convert path needs: `fctiw`/`fctiwz` write the integer into
+the FPR's low word and `stfiwx` stores it — the pattern behind every
+float-to-int cast. Reciprocal estimates (`fres`, `frsqrte`) are emitted too,
+along with the X-form **indexed** load/stores (`lwzx`/`lhzx`/`lhax`/`lbzx`/
+`stwx`/`sthx`/`stbx` and the FP `lfsx`/`lfdx`/`stfsx`/`stfdx`/`stfiwx`).
+
+Still emitted as explicit `ppc_unimplemented` traps (not wrong code): `fsqrt`
+(which real Gekko traps anyway), Gekko's paired-singles (decoded for
+disassembly but not emitted — their quantized load/store needs the GQR
+registers), and supervisor instructions.
 
 **Runtime bridge.** `runtime/src/ppc_bridge.cpp` implements the recompiler's
 memory/branch hooks over a live `gcrt::Memory` and a guest-address→function
