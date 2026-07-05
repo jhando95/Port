@@ -27,6 +27,9 @@ The tooling that glues it together lives in `tools/`.
     modified assets — "DLC" — get back into a playable image)
   - RARC archives (`.arc`/`.szs`, where MKDD stores tracks and characters):
     list, extract, create, with transparent Yaz0 handling
+  - BTI textures: decode any common GX pixel format (I4/I8/IA4/IA8/RGB565/
+    RGB5A3/RGBA32/CMPR) to PNG, and encode PNG back to BTI — custom texture
+    mods without external image libraries
   - DOL executables: parse headers, sections, entry point
   - Yaz0 compression: decompress and compress
 - **`runtime/`** — `gcrt`, a C++ runtime library skeleton implementing GameCube
@@ -50,6 +53,9 @@ gcport yaz0 decompress file.szs file.arc
 gcport rarc list extracted/files/Course/Luigi.arc
 gcport rarc extract extracted/files/Course/Luigi.arc -o luigi/
 gcport rarc create luigi/ -o Luigi.arc        # add --yaz0 for .szs
+
+gcport bti decode luigi/textures/road.bti road.png
+gcport bti encode road_edited.png road.bti --format RGB5A3  # CMPR is decode-only
 ```
 
 ## Quick start (runtime)

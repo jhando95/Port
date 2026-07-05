@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from . import dol as dol_mod
-from . import gcm, rarc, yaz0
+from . import bti, gcm, gx_texture, png, rarc, yaz0
 
 
 def _cmd_iso_info(args: argparse.Namespace) -> int:
@@ -56,6 +56,32 @@ def _cmd_rarc_create(args: argparse.Namespace) -> int:
         image = yaz0_mod.compress(image)
     Path(args.output).write_bytes(image)
     print(f"created {args.output} ({len(image):#x} bytes)")
+    return 0
+
+
+def _cmd_bti_info(args: argparse.Namespace) -> int:
+    print(bti.Bti.parse(Path(args.texture).read_bytes()).describe())
+    return 0
+
+
+def _cmd_bti_decode(args: argparse.Namespace) -> int:
+    tex = bti.Bti.parse(Path(args.texture).read_bytes())
+    Path(args.output).write_bytes(png.write(tex.width, tex.height, tex.rgba))
+    print(f"decoded {tex.width}x{tex.height} "
+          f"{gx_texture.FORMAT_NAMES[tex.format]} -> {args.output}")
+    return 0
+
+
+def _cmd_bti_encode(args: argparse.Namespace) -> int:
+    fmt = gx_texture.NAME_TO_FORMAT.get(args.format.upper())
+    if fmt is None or fmt not in gx_texture.ENCODABLE:
+        supported = ", ".join(
+            gx_texture.FORMAT_NAMES[f] for f in sorted(gx_texture.ENCODABLE))
+        print(f"error: format must be one of: {supported}", file=sys.stderr)
+        return 1
+    width, height, rgba = png.read(Path(args.input).read_bytes())
+    Path(args.output).write_bytes(bti.build(fmt, width, height, rgba))
+    print(f"encoded {width}x{height} as {args.format.upper()} -> {args.output}")
     return 0
 
 
@@ -116,6 +142,22 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--yaz0", action="store_true",
                    help="Yaz0-compress the result (.szs style)")
     p.set_defaults(func=_cmd_rarc_create)
+
+    p_bti = sub.add_parser("bti", help="BTI textures")
+    bti_sub = p_bti.add_subparsers(dest="subcommand", required=True)
+    p = bti_sub.add_parser("info", help="show texture format and size")
+    p.add_argument("texture")
+    p.set_defaults(func=_cmd_bti_info)
+    p = bti_sub.add_parser("decode", help="decode a BTI to PNG")
+    p.add_argument("texture")
+    p.add_argument("output")
+    p.set_defaults(func=_cmd_bti_decode)
+    p = bti_sub.add_parser("encode", help="encode a PNG to BTI")
+    p.add_argument("input")
+    p.add_argument("output")
+    p.add_argument("--format", default="RGB5A3",
+                   help="GX texture format (default RGB5A3)")
+    p.set_defaults(func=_cmd_bti_encode)
 
     p_yaz0 = sub.add_parser("yaz0", help="Yaz0 compression")
     yaz0_sub = p_yaz0.add_subparsers(dest="subcommand", required=True)
