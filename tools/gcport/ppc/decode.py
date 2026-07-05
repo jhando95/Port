@@ -26,10 +26,13 @@ class Instruction:
     raw: int
     mnemonic: str = ".word"
 
-    # Semantic register roles (None when unused). `dest` is the written GPR.
+    # Semantic register roles (None when unused). `dest` is the written
+    # register (GPR or FPR depending on the instruction).
     dest: int | None = None
     src_a: int | None = None
     src_b: int | None = None
+    src_c: int | None = None  # FP multiply-add third operand (frC)
+    is_float: bool = False    # dest/srcs name FPRs, not GPRs
 
     # Immediates.
     simm: int | None = None      # sign-extended
@@ -231,8 +234,125 @@ def decode(word: int, address: int = 0) -> Instruction:
     if opcode == 31:
         return _decode_x_form(word, address, f1, f2, f3, rc)
 
+    # --- floating-point load/store (opcodes 48-55) ------------------------
+    if 48 <= opcode <= 55:
+        return _decode_fp_ldst(word, address, opcode, f1, f2)
+
+    # --- floating-point arithmetic (opcodes 59 single, 63 double) ---------
+    if opcode in (59, 63):
+        return _decode_fp_arith(word, address, opcode, f1, f2, f3, rc)
+
+    # --- paired singles (Gekko) — decode for disassembly only -------------
+    if opcode in (4, 56, 57, 60, 61):
+        return _decode_paired_single(word, address, opcode, f1, f2, f3)
+
     insn.mnemonic = ".word"
     insn.operands = [f"0x{word:08x}"]
+    return insn
+
+
+_FP_LDST = {
+    48: ("lfs", False, False), 49: ("lfsu", False, True),
+    50: ("lfd", False, False), 51: ("lfdu", False, True),
+    52: ("stfs", True, False), 53: ("stfsu", True, True),
+    54: ("stfd", True, False), 55: ("stfdu", True, True),
+}
+
+
+def _decode_fp_ldst(word, address, opcode, f1, f2) -> Instruction:
+    insn = Instruction(address=address, raw=word, is_float=True)
+    name, is_store, _update = _FP_LDST[opcode]
+    disp = _sign_extend(word & 0xFFFF, 16)
+    insn.mnemonic = name
+    insn.disp = disp
+    insn.src_a = f2  # base GPR (rA); 0 means literal 0
+    if is_store:
+        insn.src_b = f1  # frS
+    else:
+        insn.dest = f1   # frD
+    insn.operands = [f"f{f1}", f"{disp}(r{f2})"]
+    return insn
+
+
+# A-form (5-bit XO) floating ops, shared by single (59) and double (63).
+_FP_A_FORM = {
+    18: "fdiv", 20: "fsub", 21: "fadd", 22: "fsqrt", 23: "fsel",
+    24: "fres", 25: "fmul", 26: "frsqrte", 28: "fmsub", 29: "fmadd",
+    30: "fnmsub", 31: "fnmadd",
+}
+# X-form (10-bit XO) floating ops under opcode 63.
+_FP_X_FORM = {
+    0: "fcmpu", 32: "fcmpo", 12: "frsp", 14: "fctiw", 15: "fctiwz",
+    40: "fneg", 72: "fmr", 136: "fnabs", 264: "fabs",
+}
+
+
+def _decode_fp_arith(word, address, opcode, f1, f2, f3, rc) -> Instruction:
+    insn = Instruction(address=address, raw=word, is_float=True, rc=rc)
+    xo5 = (word >> 1) & 0x1F
+    frc = (word >> 6) & 0x1F
+
+    if xo5 in _FP_A_FORM and not (opcode == 63 and xo5 in (0,)):
+        name = _FP_A_FORM[xo5]
+        suffix = "s" if opcode == 59 else ""
+        insn.mnemonic = name + suffix + ("." if rc else "")
+        insn.dest, insn.src_a, insn.src_b, insn.src_c = f1, f2, f3, frc
+        # render operands per how many sources each op reads
+        if name in ("fadd", "fsub", "fdiv"):
+            insn.src_c = None
+            insn.operands = [f"f{f1}", f"f{f2}", f"f{f3}"]
+        elif name == "fmul":
+            insn.src_b = None
+            insn.operands = [f"f{f1}", f"f{f2}", f"f{frc}"]
+        elif name in ("fmadd", "fmsub", "fnmadd", "fnmsub", "fsel"):
+            insn.operands = [f"f{f1}", f"f{f2}", f"f{frc}", f"f{f3}"]
+        else:  # fsqrt, fres, frsqrte: single source in frB
+            insn.src_a = f3
+            insn.src_b = insn.src_c = None
+            insn.operands = [f"f{f1}", f"f{f3}"]
+        return insn
+
+    # X-form (opcode 63 only for these)
+    xo10 = (word >> 1) & 0x3FF
+    name = _FP_X_FORM.get(xo10)
+    if name is None:
+        insn.mnemonic = ".word"
+        insn.is_float = False
+        insn.operands = [f"0x{word:08x}"]
+        return insn
+    if name in ("fcmpu", "fcmpo"):
+        crf = (word >> 23) & 0x7
+        insn.crf, insn.src_a, insn.src_b = crf, f2, f3
+        insn.mnemonic = name
+        insn.operands = ([f"cr{crf}", f"f{f2}", f"f{f3}"])
+        return insn
+    # unary: frD, frB
+    insn.mnemonic = name + ("." if rc else "")
+    insn.dest, insn.src_b = f1, f3
+    insn.operands = [f"f{f1}", f"f{f3}"]
+    return insn
+
+
+def _decode_paired_single(word, address, opcode, f1, f2, f3) -> Instruction:
+    """Decode Gekko paired-single ops enough to disassemble. Emission is not
+    yet implemented (the recompiler emits an explicit trap)."""
+    insn = Instruction(address=address, raw=word, is_float=True)
+    if opcode in (56, 57):
+        insn.mnemonic = "psq_l" + ("u" if opcode == 57 else "")
+        insn.operands = [f"f{f1}", f"r{f2}"]
+        return insn
+    if opcode in (60, 61):
+        insn.mnemonic = "psq_st" + ("u" if opcode == 61 else "")
+        insn.operands = [f"f{f1}", f"r{f2}"]
+        return insn
+    # opcode 4: paired-single arithmetic (A-form-like)
+    ps_ops = {18: "ps_div", 20: "ps_sub", 21: "ps_add", 25: "ps_mul",
+              28: "ps_msub", 29: "ps_madd", 40: "ps_neg", 72: "ps_mr",
+              264: "ps_abs"}
+    xo5 = (word >> 1) & 0x1F
+    xo10 = (word >> 1) & 0x3FF
+    insn.mnemonic = ps_ops.get(xo5) or ps_ops.get(xo10) or "ps_?"
+    insn.operands = [f"f{f1}", f"f{f2}", f"f{f3}"]
     return insn
 
 

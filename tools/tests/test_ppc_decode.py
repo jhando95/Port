@@ -114,6 +114,46 @@ def test_rlwinm():
     assert ins.dest == 3 and ins.src_a == 3 and ins.sh == 2
 
 
+def test_fp_load_store():
+    ins = d(0xC0230000)  # lfs f1, 0(r3)
+    assert ins.mnemonic == "lfs" and ins.is_float
+    assert ins.dest == 1 and ins.src_a == 3 and ins.disp == 0
+    ins = d(0xC8230000)  # lfd f1, 0(r3)
+    assert ins.mnemonic == "lfd"
+    ins = d(0xD0230008)  # stfs f1, 8(r3)
+    assert ins.mnemonic == "stfs"
+    assert ins.src_b == 1 and ins.src_a == 3 and ins.disp == 8
+
+
+def test_fp_arith():
+    ins = d(0xEC21102A)  # fadds f1, f1, f2
+    assert ins.mnemonic == "fadds" and ins.is_float
+    assert (ins.dest, ins.src_a, ins.src_b) == (1, 1, 2)
+    ins = d(0xEC2200F2)  # fmuls f1, f2, f3  (uses frA, frC)
+    assert ins.mnemonic == "fmuls"
+    assert ins.dest == 1 and ins.src_a == 2 and ins.src_c == 3
+    ins = d(0xEC2220FA)  # fmadds f1, f2, f3, f4  -> D = A*C + B
+    assert ins.mnemonic == "fmadds"
+    assert (ins.dest, ins.src_a, ins.src_c, ins.src_b) == (1, 2, 3, 4)
+
+
+def test_fp_unary_and_compare():
+    ins = d(0xFC201090)  # fmr f1, f2
+    assert ins.mnemonic == "fmr" and ins.dest == 1 and ins.src_b == 2
+    ins = d(0xFC201050)  # fneg f1, f2
+    assert ins.mnemonic == "fneg"
+    ins = d(0xFC011000)  # fcmpu cr0, f1, f2
+    assert ins.mnemonic == "fcmpu"
+    assert ins.src_a == 1 and ins.src_b == 2 and ins.crf == 0
+
+
+def test_paired_single_disassembles():
+    # ps_add f1, f2, f3 (opcode 4, xo 21) -> decoded but emission is a trap
+    word = (4 << 26) | (1 << 21) | (2 << 16) | (3 << 11) | (21 << 1)
+    ins = d(word)
+    assert ins.mnemonic == "ps_add"
+
+
 def test_unknown_is_word():
     ins = d(0x00000000)
     assert ins.mnemonic == ".word"

@@ -40,8 +40,8 @@ def test_call_becomes_hook():
 
 
 def test_unimplemented_is_explicit():
-    # a floating-point instruction we don't handle yet (lfs) -> trap, not wrong
-    code = assemble([0xC0230000, 0x4E800020])  # lfs f1, 0(r3)
+    # fsqrt needs a bit-accurate FPR model we don't have yet -> trap, not wrong
+    code = assemble([0xFC20102C, 0x4E800020])  # fsqrt f1, f2
     c = recompile_function(code, 0, "f")
     assert "ppc_unimplemented(c" in c
 
@@ -103,6 +103,59 @@ int main(void) {{
     run_res = subprocess.run([str(exe)], capture_output=True, text=True)
     assert run_res.stdout.strip() == "10", run_res.stdout
     assert run_res.returncode == 0
+
+
+@pytest.mark.skipif(_cc() is None, reason="no C compiler available")
+def test_end_to_end_float(tmp_path):
+    """Recompile lfs/fadds/stfs and verify a real float sum (1.5 + 2.25)."""
+    program = assemble([
+        0xC0230000,  # lfs  f1, 0(r3)
+        0xC0430004,  # lfs  f2, 4(r3)
+        0xEC21102A,  # fadds f1, f1, f2
+        0xD0230008,  # stfs f1, 8(r3)
+        0x4E800020,  # blr
+    ])
+    func = recompile_function(program, 0, "run")
+    (tmp_path / "ppc_runtime.h").write_text(RUNTIME_HEADER)
+    harness = f"""
+#include "ppc_runtime.h"
+#include <string.h>
+static uint8_t MEM[0x1000];
+{func}
+float ppc_read_float(PpcContext* c, uint32_t e) {{ (void)c; e&=0xfff;
+    uint32_t b=((uint32_t)MEM[e]<<24)|((uint32_t)MEM[e+1]<<16)|
+              ((uint32_t)MEM[e+2]<<8)|MEM[e+3]; float f; memcpy(&f,&b,4); return f; }}
+double ppc_read_double(PpcContext* c, uint32_t e) {{ (void)c;(void)e; return 0; }}
+void ppc_write_float(PpcContext* c, uint32_t e, float v) {{ (void)c; e&=0xfff;
+    uint32_t b; memcpy(&b,&v,4);
+    MEM[e]=b>>24; MEM[e+1]=b>>16; MEM[e+2]=b>>8; MEM[e+3]=b; }}
+void ppc_write_double(PpcContext* c, uint32_t e, double v) {{ (void)c;(void)e;(void)v; }}
+uint8_t  ppc_read_u8 (PpcContext* c, uint32_t e) {{ (void)c;(void)e; return 0; }}
+uint16_t ppc_read_u16(PpcContext* c, uint32_t e) {{ (void)c;(void)e; return 0; }}
+uint32_t ppc_read_u32(PpcContext* c, uint32_t e) {{ (void)c;(void)e; return 0; }}
+void ppc_write_u8 (PpcContext* c, uint32_t e, uint8_t v)  {{ (void)c;(void)e;(void)v; }}
+void ppc_write_u16(PpcContext* c, uint32_t e, uint16_t v) {{ (void)c;(void)e;(void)v; }}
+void ppc_write_u32(PpcContext* c, uint32_t e, uint32_t v) {{ (void)c;(void)e;(void)v; }}
+void ppc_call(PpcContext* c, uint32_t t) {{ (void)c;(void)t; }}
+void ppc_unimplemented(PpcContext* c, uint32_t a, uint32_t r) {{ (void)c;(void)a;(void)r; }}
+int main(void) {{
+    PpcContext c; for (int i=0;i<32;++i){{c.gpr[i]=0;c.fpr[i]=0;}}
+    c.lr=c.ctr=c.cr=c.xer=0;
+    c.gpr[3] = 0x100;
+    ppc_write_float(&c, 0x100, 1.5f);
+    ppc_write_float(&c, 0x104, 2.25f);
+    run(&c);
+    float result = ppc_read_float(&c, 0x108);
+    return result == 3.75f ? 0 : 1;
+}}
+"""
+    src = tmp_path / "harness.c"
+    src.write_text(harness)
+    exe = tmp_path / "harness"
+    r = subprocess.run([_cc(), "-std=c11", "-I", str(tmp_path), str(src),
+                        "-o", str(exe)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert subprocess.run([str(exe)]).returncode == 0
 
 
 @pytest.mark.skipif(_cc() is None, reason="no C compiler available")

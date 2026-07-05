@@ -21,6 +21,7 @@ RUNTIME_HEADER = r"""/* gcrt PowerPC recompiler runtime contract (generated). */
 
 typedef struct PpcContext {
     uint32_t gpr[32];
+    double   fpr[32];   /* GameCube FPRs hold doubles; singles round via cast */
     uint32_t lr;
     uint32_t ctr;
     uint32_t cr;   /* 8 condition fields, PowerPC bit order (bit0 = MSB) */
@@ -46,6 +47,17 @@ static inline void ppc_cmp_unsigned(PpcContext* c, int f, uint32_t a, uint32_t b
     c->cr = (c->cr & clear) |
             ((lt << 3 | gt << 2 | eq << 1) << (28 - base));
 }
+static inline void ppc_fcmp(PpcContext* c, int f, double a, double b) {
+    uint32_t lt = 0, gt = 0, eq = 0, un = 0;
+    if (a != a || b != b) un = 1;   /* NaN -> unordered */
+    else if (a < b) lt = 1;
+    else if (a > b) gt = 1;
+    else eq = 1;
+    int base = f * 4;
+    uint32_t clear = ~(0xFu << (28 - base));
+    c->cr = (c->cr & clear) |
+            ((lt << 3 | gt << 2 | eq << 1 | un) << (28 - base));
+}
 
 /* Memory + control hooks the host runtime implements (backed by gcrt::Memory
    and the recompiled function table). */
@@ -55,6 +67,10 @@ uint32_t ppc_read_u32(PpcContext*, uint32_t ea);
 void ppc_write_u8 (PpcContext*, uint32_t ea, uint8_t v);
 void ppc_write_u16(PpcContext*, uint32_t ea, uint16_t v);
 void ppc_write_u32(PpcContext*, uint32_t ea, uint32_t v);
+float  ppc_read_float (PpcContext*, uint32_t ea);
+double ppc_read_double(PpcContext*, uint32_t ea);
+void ppc_write_float (PpcContext*, uint32_t ea, float v);
+void ppc_write_double(PpcContext*, uint32_t ea, double v);
 void ppc_call(PpcContext*, uint32_t target);
 void ppc_unimplemented(PpcContext*, uint32_t address, uint32_t raw);
 
@@ -79,8 +95,66 @@ def _base_expr(reg: int | None, disp: int) -> str:
     return f"({_gpr(reg)} + {disp})"
 
 
+def _fpr(n: int) -> str:
+    return f"c->fpr[{n}]"
+
+
+# base mnemonic -> C expression template with {A}{B}{C} FPR placeholders
+_FP_ARITH = {
+    "fadd": "{A} + {B}", "fadds": "{A} + {B}",
+    "fsub": "{A} - {B}", "fsubs": "{A} - {B}",
+    "fmul": "{A} * {C}", "fmuls": "{A} * {C}",
+    "fdiv": "{A} / {B}", "fdivs": "{A} / {B}",
+    "fmadd": "{A} * {C} + {B}", "fmadds": "{A} * {C} + {B}",
+    "fmsub": "{A} * {C} - {B}", "fmsubs": "{A} * {C} - {B}",
+    "fnmadd": "-({A} * {C} + {B})", "fnmadds": "-({A} * {C} + {B})",
+    "fnmsub": "-({A} * {C} - {B})", "fnmsubs": "-({A} * {C} - {B})",
+}
+_FP_SINGLE = {n for n in _FP_ARITH if n.endswith("s")}
+_FP_UNARY = {
+    "fmr": "{B}", "fneg": "-{B}", "fabs": "__builtin_fabs({B})",
+    "fnabs": "-__builtin_fabs({B})", "frsp": "(double)(float){B}",
+}
+
+
+def _emit_fp(insn: Instruction) -> list[str]:
+    m = insn.mnemonic.rstrip(".")
+    d, a, b, cc = insn.dest, insn.src_a, insn.src_b, insn.src_c
+
+    if m in ("lfs", "lfsu"):
+        return [f"{_fpr(d)} = (double)ppc_read_float(c, {_base_expr(a, insn.disp)});"]
+    if m in ("lfd", "lfdu"):
+        return [f"{_fpr(d)} = ppc_read_double(c, {_base_expr(a, insn.disp)});"]
+    if m in ("stfs", "stfsu"):
+        return [f"ppc_write_float(c, {_base_expr(a, insn.disp)}, "
+                f"(float){_fpr(b)});"]
+    if m in ("stfd", "stfdu"):
+        return [f"ppc_write_double(c, {_base_expr(a, insn.disp)}, {_fpr(b)});"]
+
+    if m in _FP_ARITH:
+        expr = _FP_ARITH[m].format(
+            A=_fpr(a), B=_fpr(b) if b is not None else "0.0",
+            C=_fpr(cc) if cc is not None else "0.0")
+        if m in _FP_SINGLE:
+            expr = f"(double)(float)({expr})"
+        return [f"{_fpr(d)} = {expr};"]
+    if m in _FP_UNARY:
+        return [f"{_fpr(d)} = {_FP_UNARY[m].format(B=_fpr(b))};"]
+    if m == "fsel":
+        return [f"{_fpr(d)} = ({_fpr(a)} >= 0.0) ? {_fpr(cc)} : {_fpr(b)};"]
+    if m in ("fcmpu", "fcmpo"):
+        return [f"ppc_fcmp(c, {insn.crf or 0}, {_fpr(a)}, {_fpr(b)});"]
+
+    # fsqrt/fres/frsqrte and the integer-convert ops (fctiw/fctiwz) need a
+    # bit-accurate FPR model; not handled yet -> explicit trap.
+    return [f"ppc_unimplemented(c, 0x{insn.address:08x}u, "
+            f"0x{insn.raw:08x}u); /* {insn.disasm} */"]
+
+
 def _emit_one(insn: Instruction) -> list[str]:
     """Return the C statements implementing a single instruction."""
+    if insn.is_float:
+        return _emit_fp(insn)
     m = insn.mnemonic.rstrip(".")  # record-bit handling is separate
     d, a, b = insn.dest, insn.src_a, insn.src_b
 

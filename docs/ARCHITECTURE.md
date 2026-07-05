@@ -77,11 +77,18 @@ memory/branch hooks the runtime implements (backed by `gcrt::Memory`).
 Correctness is proven end-to-end: a test recompiles a hand-assembled loop,
 compiles the emitted C with the host compiler, runs it, and checks the result.
 
-Not yet handled (and emitted as explicit `ppc_unimplemented` traps rather than
-wrong code): floating point, Gekko paired-singles (SIMD), and supervisor
-instructions. Function discovery, the address→function dispatch table, and
-feeding real `main.dol` code through it are the next steps — the first of those
-that needs a user-supplied dump.
+Scalar floating point is handled too: the FPR file (modeled as doubles),
+load/store (`lfs`/`lfd`/`stfs`/`stfd`), the arithmetic and multiply-add family
+(`fadd(s)`/`fsub(s)`/`fmul(s)`/`fdiv(s)`/`fmadd(s)`…, with single-precision
+rounding), `fmr`/`fneg`/`fabs`/`frsp`/`fsel`, and `fcmpu`/`fcmpo`. A second
+gcc-backed end-to-end test computes a real float sum through the emitted code.
+
+Still emitted as explicit `ppc_unimplemented` traps (not wrong code): the
+integer-convert and estimate ops (`fctiwz`, `fres`, `frsqrte`, `fsqrt`) that
+need a bit-accurate FPR model, Gekko's paired-singles (decoded for
+disassembly but not emitted), and supervisor instructions. Function discovery,
+the address→function dispatch table, and feeding real `main.dol` code through
+it are the next steps — the first that needs a user-supplied dump.
 
 ## Where "DLC" fits
 
