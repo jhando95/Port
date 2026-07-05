@@ -31,7 +31,7 @@ game code doesn't know the difference.
 | DVD (async file reads by path/entrynum) | reads from the extracted asset directory, FST-compatible path resolution | skeleton |
 | PAD (controllers) | HAL input backend: SDL2 gamepad/keyboard (`SdlHal`) or headless (`NullHal`) | working |
 | VI (video timing, retrace callbacks) | 59.94 Hz frame pacing, retrace callback dispatch | skeleton |
-| GX (GPU command interface) | software rasterizer into an RGBA EFB: viewport/projection/modelview transforms, immediate-mode triangles, Gouraud shading, z-buffer, copy-clear. Textures/TEV/lighting next; a GL/Vulkan backend can replace the rasterizer behind the same API | started |
+| GX (GPU command interface) | software rasterizer into an RGBA EFB: viewport/projection/modelview transforms, immediate-mode triangles, Gouraud shading, z-buffer, copy-clear, and textured triangles (all GC pixel formats, perspective-correct UVs, wrap modes, modulate-by-vertex-color). TEV stages and lighting next; a GL/Vulkan backend can replace the rasterizer behind the same API | in progress |
 | AX/DSP (audio) | mixer → host audio out | not started |
 | CARD (memory card) | save files on disk | not started |
 

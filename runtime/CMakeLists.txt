@@ -10,6 +10,7 @@ add_library(gcrt STATIC
     src/pad.cpp
     src/vi.cpp
     src/gx.cpp
+    src/gx_texture.cpp
     src/hal_null.cpp
 )
 target_include_directories(gcrt PUBLIC include)
@@ -41,6 +42,10 @@ add_test(NAME smoke COMMAND gcrt_smoke_test)
 add_executable(gcrt_gx_test tests/gx_test.cpp)
 target_link_libraries(gcrt_gx_test PRIVATE gcrt)
 add_test(NAME gx COMMAND gcrt_gx_test)
+
+add_executable(gcrt_gx_texture_test tests/gx_texture_test.cpp)
+target_link_libraries(gcrt_gx_texture_test PRIVATE gcrt)
+add_test(NAME gx_texture COMMAND gcrt_gx_texture_test)
 
 if(SDL2_FOUND)
     add_executable(gcrt_sdl_hal_test tests/sdl_hal_test.cpp)

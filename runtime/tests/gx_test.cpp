@@ -107,6 +107,81 @@ int main() {
     drawTriangle(left, GXColor{255, 128, 0, 255});
     CHECK(colorEquals(GXReadPixel(8, 8), 255, 128, 0));  // shifted into view
 
+    // --- textured triangle: 2x2 RGBA8 texture sampled onto geometry ---------
+    // Build a 2x2 texture: red, green / blue, white (RGBA8 tile layout).
+    // RGBA8 is 4x4 tiles of 64 bytes (32 AR + 32 GB); a 2x2 image occupies
+    // one padded tile. Encode the four texels at their tile positions.
+    {
+        uint8_t tile[64] = {0};
+        auto setTexel = [&](int px, int py, uint8_t r, uint8_t g, uint8_t b,
+                            uint8_t a) {
+            int off = (py * 4 + px) * 2;
+            tile[off] = a;
+            tile[off + 1] = r;
+            tile[32 + off] = g;
+            tile[32 + off + 1] = b;
+        };
+        setTexel(0, 0, 255, 0, 0, 255);    // red
+        setTexel(1, 0, 0, 255, 0, 255);    // green
+        setTexel(0, 1, 0, 0, 255, 255);    // blue
+        setTexel(1, 1, 255, 255, 255, 255);  // white
+
+        GXTexObj tex;
+        bool ok = GXInitTexObj(&tex, GX_TF_RGBA8, 2, 2, tile, sizeof(tile),
+                               GX_CLAMP, GX_CLAMP);
+        CHECK(ok);
+        CHECK(tex.width == 2 && tex.height == 2);
+
+        GXLoadTexObj(&tex);
+        GXLoadPosMtxImm(kIdentity34);
+        GXCopyClear();
+        // Full-screen quad (two triangles) mapping the whole texture.
+        // NDC corners; texcoords 0..1. Screen y grows down, so top-left of
+        // screen samples t=0.
+        auto texTri = [&](float p[3][3], float uv[3][2]) {
+            GXBegin(GX_TRIANGLES, 3);
+            for (int i = 0; i < 3; ++i) {
+                GXPosition3f32(p[i][0], p[i][1], p[i][2]);
+                GXColor4u8(255, 255, 255, 255);  // white = passthrough modulate
+                GXTexCoord2f32(uv[i][0], uv[i][1]);
+            }
+            GXEnd();
+        };
+        // triangle 1: top-left, top-right, bottom-left
+        float t1[3][3] = {{-1, 1, 0}, {1, 1, 0}, {-1, -1, 0}};
+        float uv1[3][2] = {{0, 0}, {1, 0}, {0, 1}};
+        texTri(t1, uv1);
+        float t2[3][3] = {{1, 1, 0}, {1, -1, 0}, {-1, -1, 0}};
+        float uv2[3][2] = {{1, 0}, {1, 1}, {0, 1}};
+        texTri(t2, uv2);
+
+        // Corners of the 64x64 framebuffer sample the four texels.
+        CHECK(colorEquals(GXReadPixel(4, 4), 255, 0, 0));      // top-left red
+        CHECK(colorEquals(GXReadPixel(59, 4), 0, 255, 0));     // top-right green
+        CHECK(colorEquals(GXReadPixel(4, 59), 0, 0, 255));     // bottom-left blue
+        CHECK(colorEquals(GXReadPixel(59, 59), 255, 255, 255));  // bottom-right white
+
+        // Vertex-color modulation: half-intensity vertex color halves the texel.
+        GXCopyClear();
+        GXBegin(GX_TRIANGLES, 3);
+        float big2[3][3] = {{-1, -1, 0}, {3, -1, 0}, {-1, 3, 0}};
+        for (int i = 0; i < 3; ++i) {
+            GXPosition3f32(big2[i][0], big2[i][1], big2[i][2]);
+            GXColor4u8(128, 128, 128, 255);
+            GXTexCoord2f32(0.25f, 0.25f);  // samples the red texel
+        }
+        GXEnd();
+        GXColor modulated = GXReadPixel(32, 32);
+        CHECK(modulated.r > 120 && modulated.r < 135);  // 255 * 128/255
+        CHECK(modulated.g == 0 && modulated.b == 0);
+
+        // Unbinding the texture returns to vertex-color shading.
+        GXLoadTexObj(nullptr);
+        GXCopyClear();
+        drawTriangle(big2, GXColor{77, 88, 99, 255});
+        CHECK(colorEquals(GXReadPixel(32, 32), 77, 88, 99));
+    }
+
     GXShutdown();
 
     if (g_failures == 0) {

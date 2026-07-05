@@ -11,11 +11,29 @@
 #pragma once
 
 #include <cstdint>
+#include <vector>
+
+#include "gcrt/gx_texture.h"
 
 namespace gcrt {
 
 struct GXColor {
     uint8_t r = 0, g = 0, b = 0, a = 255;
+};
+
+enum GXTexWrapMode : uint8_t {
+    GX_CLAMP = 0,
+    GX_REPEAT = 1,
+    GX_MIRROR = 2,
+};
+
+// A texture object: decoded RGBA texels plus sampling parameters. Built once
+// from encoded texture data, then bound with GXLoadTexObj before drawing.
+struct GXTexObj {
+    int width = 0, height = 0;
+    GXTexWrapMode wrap_s = GX_REPEAT;
+    GXTexWrapMode wrap_t = GX_REPEAT;
+    std::vector<uint8_t> rgba;  // decoded, width*height*4
 };
 
 using Mtx = float[3][4];    // row-major 3x4, GC convention
@@ -50,6 +68,16 @@ void GXSetProjection(const Mtx44 matrix, GXProjectionType type);
 void GXLoadPosMtxImm(const Mtx matrix, uint32_t id = 0);
 void GXSetZMode(bool compare_enable, GXCompare func, bool update_enable);
 
+// Build a texture object by decoding encoded texture data (as stored in a
+// BTI or TPL). Returns false if the format is unsupported or data too short.
+bool GXInitTexObj(GXTexObj* obj, GXTexFmt format, int width, int height,
+                  const uint8_t* data, size_t size,
+                  GXTexWrapMode wrap_s = GX_REPEAT,
+                  GXTexWrapMode wrap_t = GX_REPEAT);
+// Bind a texture object for subsequent draws. Pass nullptr to disable
+// texturing (vertex colors only).
+void GXLoadTexObj(const GXTexObj* obj);
+
 void GXSetCopyClear(GXColor color, uint32_t z);
 // Clears the EFB with the copy-clear color and resets the depth buffer.
 void GXCopyClear();
@@ -59,6 +87,9 @@ void GXCopyClear();
 void GXBegin(GXPrimitive primitive, int vertex_count);
 void GXPosition3f32(float x, float y, float z);
 void GXColor4u8(uint8_t r, uint8_t g, uint8_t b, uint8_t a);
+// Optional per-vertex texture coordinate. When a texture is bound, the
+// sampled texel is modulated by the vertex color; otherwise ignored.
+void GXTexCoord2f32(float s, float t);
 void GXEnd();
 
 // Test/tooling helper: read one pixel (RGBA).

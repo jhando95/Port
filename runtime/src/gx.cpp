@@ -13,6 +13,7 @@ namespace {
 struct Vertex {
     float x = 0, y = 0, z = 0;  // object space
     GXColor color;
+    float s = 0, t = 0;  // texture coordinates
 };
 
 struct GxState {
@@ -32,10 +33,13 @@ struct GxState {
 
     GXColor clear_color;
 
+    const GXTexObj* texture = nullptr;
+
     // immediate-mode assembly
     bool in_begin = false;
     int expected_vertices = 0;
     GXColor current_color{255, 255, 255, 255};
+    float current_s = 0, current_t = 0;
     std::vector<Vertex> pending;
 };
 
@@ -49,6 +53,8 @@ GxState& state() {
 struct ScreenVertex {
     float x, y, z;   // screen space, depth in [0,1]
     float r, g, b, a;
+    float s, t;      // texture coordinates
+    float inv_w;     // 1/clip_w, for perspective-correct interpolation
 };
 
 bool depthPasses(GXCompare func, float incoming, float stored) {
@@ -92,7 +98,41 @@ bool transform(const GxState& s, const Vertex& v, ScreenVertex* out) {
     out->g = v.color.g;
     out->b = v.color.b;
     out->a = v.color.a;
+    out->s = v.s;
+    out->t = v.t;
+    out->inv_w = 1.0f / cw;
     return true;
+}
+
+int wrapCoord(int coord, int size, GXTexWrapMode mode) {
+    switch (mode) {
+        case GX_CLAMP:
+            return std::clamp(coord, 0, size - 1);
+        case GX_MIRROR: {
+            int period = 2 * size;
+            int m = ((coord % period) + period) % period;
+            return m < size ? m : period - 1 - m;
+        }
+        case GX_REPEAT:
+        default: {
+            int m = coord % size;
+            return m < 0 ? m + size : m;
+        }
+    }
+}
+
+// Nearest-neighbour texel fetch with wrap modes.
+void sampleTexture(const GXTexObj& tex, float s, float t, float* r, float* g,
+                   float* b, float* a) {
+    int tx = wrapCoord(static_cast<int>(std::floor(s * tex.width)), tex.width,
+                       tex.wrap_s);
+    int ty = wrapCoord(static_cast<int>(std::floor(t * tex.height)), tex.height,
+                       tex.wrap_t);
+    size_t i = (static_cast<size_t>(ty) * tex.width + tx) * 4;
+    *r = tex.rgba[i];
+    *g = tex.rgba[i + 1];
+    *b = tex.rgba[i + 2];
+    *a = tex.rgba[i + 3];
 }
 
 float edge(const ScreenVertex& a, const ScreenVertex& b, float px, float py) {
@@ -134,15 +174,39 @@ void rasterize(GxState& s, ScreenVertex v0, ScreenVertex v1, ScreenVertex v2) {
             }
             if (s.z_update) s.depth[di] = z;
 
+            // Vertex colors interpolate linearly in screen space (matching
+            // the GC's Gouraud shading); texture coords interpolate
+            // perspective-correctly via 1/w.
             auto lerp = [&](float a, float b, float c) {
                 return static_cast<uint8_t>(
                     std::clamp(w0 * a + w1 * b + w2 * c, 0.0f, 255.0f));
             };
+            float cr = w0 * v0.r + w1 * v1.r + w2 * v2.r;
+            float cg = w0 * v0.g + w1 * v1.g + w2 * v2.g;
+            float cb = w0 * v0.b + w1 * v1.b + w2 * v2.b;
+            float ca = w0 * v0.a + w1 * v1.a + w2 * v2.a;
+
             uint8_t* px_out = &s.framebuffer[di * 4];
-            px_out[0] = lerp(v0.r, v1.r, v2.r);
-            px_out[1] = lerp(v0.g, v1.g, v2.g);
-            px_out[2] = lerp(v0.b, v1.b, v2.b);
-            px_out[3] = lerp(v0.a, v1.a, v2.a);
+            if (s.texture && !s.texture->rgba.empty()) {
+                float inv_w = w0 * v0.inv_w + w1 * v1.inv_w + w2 * v2.inv_w;
+                float persp = inv_w != 0.0f ? 1.0f / inv_w : 0.0f;
+                float ss = (w0 * v0.s * v0.inv_w + w1 * v1.s * v1.inv_w +
+                            w2 * v2.s * v2.inv_w) * persp;
+                float tt = (w0 * v0.t * v0.inv_w + w1 * v1.t * v1.inv_w +
+                            w2 * v2.t * v2.inv_w) * persp;
+                float tr, tg, tb, ta;
+                sampleTexture(*s.texture, ss, tt, &tr, &tg, &tb, &ta);
+                // modulate: texel * vertex color, both normalized
+                px_out[0] = static_cast<uint8_t>(tr * cr / 255.0f);
+                px_out[1] = static_cast<uint8_t>(tg * cg / 255.0f);
+                px_out[2] = static_cast<uint8_t>(tb * cb / 255.0f);
+                px_out[3] = static_cast<uint8_t>(ta * ca / 255.0f);
+            } else {
+                px_out[0] = lerp(v0.r, v1.r, v2.r);
+                px_out[1] = lerp(v0.g, v1.g, v2.g);
+                px_out[2] = lerp(v0.b, v1.b, v2.b);
+                px_out[3] = lerp(v0.a, v1.a, v2.a);
+            }
         }
     }
 }
@@ -210,6 +274,25 @@ void GXSetZMode(bool compare_enable, GXCompare func, bool update_enable) {
     s.z_update = update_enable;
 }
 
+bool GXInitTexObj(GXTexObj* obj, GXTexFmt format, int width, int height,
+                  const uint8_t* data, size_t size, GXTexWrapMode wrap_s,
+                  GXTexWrapMode wrap_t) {
+    if (!obj || width <= 0 || height <= 0) return false;
+    if (size < GXTexEncodedSize(format, width, height)) return false;
+    try {
+        obj->rgba = GXDecodeTexture(format, width, height, data, size);
+    } catch (const std::exception&) {
+        return false;
+    }
+    obj->width = width;
+    obj->height = height;
+    obj->wrap_s = wrap_s;
+    obj->wrap_t = wrap_t;
+    return true;
+}
+
+void GXLoadTexObj(const GXTexObj* obj) { state().texture = obj; }
+
 void GXSetCopyClear(GXColor color, uint32_t) { state().clear_color = color; }
 
 void GXCopyClear() {
@@ -245,6 +328,8 @@ void GXPosition3f32(float x, float y, float z) {
     v.y = y;
     v.z = z;
     v.color = s.current_color;
+    v.s = s.current_s;
+    v.t = s.current_t;
     s.pending.push_back(v);
 }
 
@@ -253,6 +338,16 @@ void GXColor4u8(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
     s.current_color = GXColor{r, g, b, a};
     if (s.in_begin && !s.pending.empty()) {
         s.pending.back().color = s.current_color;  // color follows position
+    }
+}
+
+void GXTexCoord2f32(float s_coord, float t_coord) {
+    auto& s = state();
+    s.current_s = s_coord;
+    s.current_t = t_coord;
+    if (s.in_begin && !s.pending.empty()) {
+        s.pending.back().s = s_coord;  // texcoord follows position
+        s.pending.back().t = t_coord;
     }
 }
 
