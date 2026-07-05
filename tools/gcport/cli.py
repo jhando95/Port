@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from . import dol as dol_mod
-from . import bti, gcm, gx_texture, png, rarc, yaz0
+from . import bti, gcm, gx_texture, png, rarc, verify as verify_mod, yaz0
 
 
 def _cmd_iso_info(args: argparse.Namespace) -> int:
@@ -35,6 +35,12 @@ def _cmd_iso_build(args: argparse.Namespace) -> int:
 def _cmd_dol_info(args: argparse.Namespace) -> int:
     print(dol_mod.Dol.parse(Path(args.dol).read_bytes()).describe())
     return 0
+
+
+def _cmd_verify(args: argparse.Namespace) -> int:
+    report = verify_mod.verify(Path(args.source))
+    print(report.render())
+    return 0 if report.ok else 2
 
 
 def _cmd_rarc_list(args: argparse.Namespace) -> int:
@@ -118,6 +124,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--align", type=lambda s: int(s, 0), default=0x100,
                    help="file data alignment (default 0x100)")
     p.set_defaults(func=_cmd_iso_build)
+
+    p = sub.add_parser(
+        "verify",
+        help="parse every recognized file in an extracted dir or ISO and report")
+    p.add_argument("source", help="extracted directory or .iso path")
+    p.set_defaults(func=_cmd_verify)
 
     p_dol = sub.add_parser("dol", help="DOL executables")
     dol_sub = p_dol.add_subparsers(dest="subcommand", required=True)

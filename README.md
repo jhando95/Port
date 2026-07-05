@@ -47,6 +47,9 @@ pytest                        # run the test suite
 gcport iso info game.iso      # show disc header, DOL, FST stats
 gcport iso extract game.iso -o extracted/
 gcport iso build extracted/ -o rebuilt.iso
+
+gcport verify extracted/      # parse every archive/texture/DOL, print a report
+gcport verify game.iso        # (works directly on an ISO too)
 gcport dol info extracted/sys/main.dol
 gcport yaz0 decompress file.szs file.arc
 
