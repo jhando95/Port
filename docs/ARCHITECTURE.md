@@ -23,10 +23,28 @@ PAD, VI, GX, AX, CARD…). On console those talk to hardware. In a native port,
 **gcrt** provides the same interfaces backed by PC facilities. The recompiled
 game code doesn't know the difference.
 
+### Boot sequence (what runs before the game)
+
+1. `gcport iso extract` (offline) pulls `main.dol` and the asset tree out of
+   the user's dump.
+2. At startup the runtime creates the guest **Memory** (24 MiB MEM1 + uncached
+   mirror), then **LoadDol** places each DOL section at its load address and
+   zeroes BSS — recompiled code references these absolute addresses directly.
+3. `OSInit`/`DVDInit`/`VIInit`/`GXInit`/`PADInit` bring up the subsystems.
+4. Control transfers to the recompiled entry point (the recompiler emits the
+   entry as a C function; the loaded data/BSS back its global state).
+
+Steps 1–2 exist and are tested today (including a cross-language test where the
+Python tool builds a DOL and the C++ loader consumes it). Step 4 is what the
+static recompiler produces and is the next major integration once a dump is
+available.
+
 ## gcrt subsystems
 
 | GameCube API | gcrt implementation | Status |
 |---|---|---|
+| Memory (guest address space) | flat MEM1 backing store (0x80000000, 24 MiB) with the uncached mirror, big-endian typed accessors, bounds-checked translation | working |
+| DOL loader (boot) | parses main.dol, places sections at their load addresses in guest memory, zeroes BSS; the step before control passes to recompiled code | working |
 | OS (time, arenas, threads, reports) | `std::chrono`, malloc-backed arenas, host threads | skeleton |
 | DVD (async file reads by path/entrynum) | reads from the extracted asset directory, FST-compatible path resolution | skeleton |
 | PAD (controllers) | HAL input backend: SDL2 gamepad/keyboard (`SdlHal`) or headless (`NullHal`) | working |

@@ -11,6 +11,8 @@ add_library(gcrt STATIC
     src/vi.cpp
     src/gx.cpp
     src/gx_texture.cpp
+    src/memory.cpp
+    src/dol.cpp
     src/hal_null.cpp
 )
 target_include_directories(gcrt PUBLIC include)
@@ -46,6 +48,21 @@ add_test(NAME gx COMMAND gcrt_gx_test)
 add_executable(gcrt_gx_texture_test tests/gx_texture_test.cpp)
 target_link_libraries(gcrt_gx_texture_test PRIVATE gcrt)
 add_test(NAME gx_texture COMMAND gcrt_gx_texture_test)
+
+add_executable(gcrt_memory_test tests/memory_test.cpp)
+target_link_libraries(gcrt_memory_test PRIVATE gcrt)
+add_test(NAME memory COMMAND gcrt_memory_test)
+
+# Cross-language check: if python3 is available, build a DOL with the gcport
+# tool and load it through the runtime loader in the same test run.
+find_program(PYTHON3 python3)
+if(PYTHON3)
+    set(GENERATED_DOL "${CMAKE_CURRENT_BINARY_DIR}/generated.dol")
+    add_test(NAME gen_dol COMMAND ${PYTHON3}
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_dol.py" "${GENERATED_DOL}")
+    add_test(NAME memory_external COMMAND gcrt_memory_test "${GENERATED_DOL}")
+    set_tests_properties(memory_external PROPERTIES DEPENDS gen_dol)
+endif()
 
 if(SDL2_FOUND)
     add_executable(gcrt_sdl_hal_test tests/sdl_hal_test.cpp)
