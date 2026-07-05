@@ -60,7 +60,11 @@ static inline void ppc_fcmp(PpcContext* c, int f, double a, double b) {
 }
 
 /* Memory + control hooks the host runtime implements (backed by gcrt::Memory
-   and the recompiled function table). */
+   and the recompiled function table). Declared with C linkage so the C++
+   runtime bridge and the C recompiled code agree on symbols. */
+#ifdef __cplusplus
+extern "C" {
+#endif
 uint8_t  ppc_read_u8 (PpcContext*, uint32_t ea);
 uint16_t ppc_read_u16(PpcContext*, uint32_t ea);
 uint32_t ppc_read_u32(PpcContext*, uint32_t ea);
@@ -73,6 +77,9 @@ void ppc_write_float (PpcContext*, uint32_t ea, float v);
 void ppc_write_double(PpcContext*, uint32_t ea, double v);
 void ppc_call(PpcContext*, uint32_t target);
 void ppc_unimplemented(PpcContext*, uint32_t address, uint32_t raw);
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 """

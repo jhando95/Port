@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(gcrt LANGUAGES CXX)
+project(gcrt LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -13,6 +13,7 @@ add_library(gcrt STATIC
     src/gx_texture.cpp
     src/memory.cpp
     src/dol.cpp
+    src/ppc_bridge.cpp
     src/hal_null.cpp
 )
 target_include_directories(gcrt PUBLIC include)
@@ -62,6 +63,28 @@ if(PYTHON3)
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_dol.py" "${GENERATED_DOL}")
     add_test(NAME memory_external COMMAND gcrt_memory_test "${GENERATED_DOL}")
     set_tests_properties(memory_external PROPERTIES DEPENDS gen_dol)
+
+    # Recompile a PPC program to C at build time, compile it into the bridge
+    # integration test, and run it against a real gcrt::Memory.
+    set(GENERATED_RECOMP "${CMAKE_CURRENT_BINARY_DIR}/recomp_program.c")
+    add_custom_command(
+        OUTPUT ${GENERATED_RECOMP}
+        COMMAND ${PYTHON3}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_recomp.py"
+            ${GENERATED_RECOMP}
+        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tests/make_recomp.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/gcport/ppc/recompile.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tools/gcport/ppc/decode.py"
+        COMMENT "Recompiling PPC test program to C")
+    add_executable(gcrt_ppc_bridge_test
+        tests/ppc_bridge_test.cpp ${GENERATED_RECOMP})
+    target_link_libraries(gcrt_ppc_bridge_test PRIVATE gcrt)
+    add_test(NAME ppc_bridge COMMAND gcrt_ppc_bridge_test)
+
+    # Guard: the committed ppc_runtime.h must match the recompiler's output.
+    add_test(NAME ppc_header_drift COMMAND ${PYTHON3}
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/check_header.py"
+        "${CMAKE_CURRENT_SOURCE_DIR}/include/gcrt/ppc_runtime.h")
 endif()
 
 if(SDL2_FOUND)

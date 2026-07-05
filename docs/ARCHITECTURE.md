@@ -86,9 +86,19 @@ gcc-backed end-to-end test computes a real float sum through the emitted code.
 Still emitted as explicit `ppc_unimplemented` traps (not wrong code): the
 integer-convert and estimate ops (`fctiwz`, `fres`, `frsqrte`, `fsqrt`) that
 need a bit-accurate FPR model, Gekko's paired-singles (decoded for
-disassembly but not emitted), and supervisor instructions. Function discovery,
-the address→function dispatch table, and feeding real `main.dol` code through
-it are the next steps — the first that needs a user-supplied dump.
+disassembly but not emitted), and supervisor instructions.
+
+**Runtime bridge.** `runtime/src/ppc_bridge.cpp` implements the recompiler's
+memory/branch hooks over a live `gcrt::Memory` and a guest-address→function
+dispatch table (`gcrt/ppc.h`). The generated contract `ppc_runtime.h` is
+committed into the runtime include tree and kept from drifting by a test that
+compares it to the recompiler's `RUNTIME_HEADER`. An integration test
+recompiles a memory-using program at build time, links it against the real
+runtime, runs it, and checks the effect in guest memory (`r5 == 84`, and
+`0x80003000` holds the stored value) — the two halves of the project proven to
+connect. Function discovery (finding routine boundaries in a real `main.dol`)
+and feeding the game's own code through this path are the next steps — the
+first that needs a user-supplied dump.
 
 ## Where "DLC" fits
 
