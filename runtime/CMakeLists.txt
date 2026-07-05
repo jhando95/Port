@@ -9,6 +9,7 @@ add_library(gcrt STATIC
     src/dvd.cpp
     src/pad.cpp
     src/vi.cpp
+    src/gx.cpp
     src/hal_null.cpp
 )
 target_include_directories(gcrt PUBLIC include)
@@ -37,8 +38,18 @@ add_executable(gcrt_smoke_test tests/smoke_test.cpp)
 target_link_libraries(gcrt_smoke_test PRIVATE gcrt)
 add_test(NAME smoke COMMAND gcrt_smoke_test)
 
+add_executable(gcrt_gx_test tests/gx_test.cpp)
+target_link_libraries(gcrt_gx_test PRIVATE gcrt)
+add_test(NAME gx COMMAND gcrt_gx_test)
+
 if(SDL2_FOUND)
     add_executable(gcrt_sdl_hal_test tests/sdl_hal_test.cpp)
     target_link_libraries(gcrt_sdl_hal_test PRIVATE gcrt)
     add_test(NAME sdl_hal COMMAND gcrt_sdl_hal_test)
+
+    add_executable(hello_triangle demo/hello_triangle.cpp)
+    target_link_libraries(hello_triangle PRIVATE gcrt)
+    add_test(NAME demo_headless COMMAND hello_triangle)
+    set_tests_properties(demo_headless PROPERTIES
+        ENVIRONMENT "SDL_VIDEODRIVER=dummy;GCRT_DEMO_FRAMES=60")
 endif()
