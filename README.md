@@ -25,6 +25,8 @@ The tooling that glues it together lives in `tools/`.
 - **`tools/`** — `gcport`, a Python package + CLI for GameCube formats:
   - GCM/ISO disc images: inspect, extract, rebuild (the rebuild step is how
     modified assets — "DLC" — get back into a playable image)
+  - RARC archives (`.arc`/`.szs`, where MKDD stores tracks and characters):
+    list, extract, create, with transparent Yaz0 handling
   - DOL executables: parse headers, sections, entry point
   - Yaz0 compression: decompress and compress
 - **`runtime/`** — `gcrt`, a C++ runtime library skeleton implementing GameCube
@@ -44,6 +46,10 @@ gcport iso extract game.iso -o extracted/
 gcport iso build extracted/ -o rebuilt.iso
 gcport dol info extracted/sys/main.dol
 gcport yaz0 decompress file.szs file.arc
+
+gcport rarc list extracted/files/Course/Luigi.arc
+gcport rarc extract extracted/files/Course/Luigi.arc -o luigi/
+gcport rarc create luigi/ -o Luigi.arc        # add --yaz0 for .szs
 ```
 
 ## Quick start (runtime)
@@ -53,6 +59,10 @@ cmake -S runtime -B runtime/build
 cmake --build runtime/build
 ctest --test-dir runtime/build --output-on-failure
 ```
+
+With SDL2 development headers installed, the build includes `gcrt::SdlHal`
+(window + keyboard/game-controller input + real frame pacing); without them
+it builds headless-only with `NullHal`.
 
 ## Status
 

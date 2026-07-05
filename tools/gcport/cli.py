@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from . import dol as dol_mod
-from . import gcm, yaz0
+from . import gcm, rarc, yaz0
 
 
 def _cmd_iso_info(args: argparse.Namespace) -> int:
@@ -34,6 +34,28 @@ def _cmd_iso_build(args: argparse.Namespace) -> int:
 
 def _cmd_dol_info(args: argparse.Namespace) -> int:
     print(dol_mod.Dol.parse(Path(args.dol).read_bytes()).describe())
+    return 0
+
+
+def _cmd_rarc_list(args: argparse.Namespace) -> int:
+    print(rarc.Rarc.parse(Path(args.archive).read_bytes()).describe())
+    return 0
+
+
+def _cmd_rarc_extract(args: argparse.Namespace) -> int:
+    arc = rarc.extract(Path(args.archive).read_bytes(), Path(args.output))
+    print(f"extracted {len(arc.files)} files to {args.output}")
+    return 0
+
+
+def _cmd_rarc_create(args: argparse.Namespace) -> int:
+    from . import yaz0 as yaz0_mod
+
+    image = rarc.create_from_dir(Path(args.directory), args.root_name)
+    if args.yaz0:
+        image = yaz0_mod.compress(image)
+    Path(args.output).write_bytes(image)
+    print(f"created {args.output} ({len(image):#x} bytes)")
     return 0
 
 
@@ -76,6 +98,24 @@ def main(argv: list[str] | None = None) -> int:
     p = dol_sub.add_parser("info", help="show DOL header, sections, entry point")
     p.add_argument("dol")
     p.set_defaults(func=_cmd_dol_info)
+
+    p_rarc = sub.add_parser("rarc", help="RARC archives (.arc/.szs)")
+    rarc_sub = p_rarc.add_subparsers(dest="subcommand", required=True)
+    p = rarc_sub.add_parser("list", help="list archive contents")
+    p.add_argument("archive")
+    p.set_defaults(func=_cmd_rarc_list)
+    p = rarc_sub.add_parser("extract", help="extract archive to a directory")
+    p.add_argument("archive")
+    p.add_argument("-o", "--output", required=True)
+    p.set_defaults(func=_cmd_rarc_extract)
+    p = rarc_sub.add_parser("create", help="create an archive from a directory")
+    p.add_argument("directory")
+    p.add_argument("-o", "--output", required=True)
+    p.add_argument("--root-name", default=None,
+                   help="archive root node name (default: directory name)")
+    p.add_argument("--yaz0", action="store_true",
+                   help="Yaz0-compress the result (.szs style)")
+    p.set_defaults(func=_cmd_rarc_create)
 
     p_yaz0 = sub.add_parser("yaz0", help="Yaz0 compression")
     yaz0_sub = p_yaz0.add_subparsers(dest="subcommand", required=True)
