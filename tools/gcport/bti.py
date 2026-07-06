@@ -41,14 +41,23 @@ class Bti:
             raise ValueError("BTI too small")
         fmt = data[0]
         width, height = struct.unpack(">HH", data[2:6])
+        palette_format = data[0x09]
+        (palette_count,) = struct.unpack(">H", data[0x0A:0x0C])
+        (palette_offset,) = struct.unpack(">I", data[0x0C:0x10])
         mipmaps = data[0x18]
         (image_offset,) = struct.unpack(">I", data[0x1C:0x20])
         if fmt not in gx_texture.TILE_SPECS:
             name = gx_texture.FORMAT_NAMES.get(fmt, str(fmt))
             raise ValueError(f"BTI uses unsupported format {name}")
+
+        palette = None
+        if fmt in gx_texture.PALETTED:
+            palette = gx_texture.decode_palette(
+                data[palette_offset:], palette_format, palette_count)
+
         size = gx_texture.encoded_size(fmt, width, height)
         payload = data[image_offset : image_offset + size]
-        rgba = gx_texture.decode(fmt, width, height, payload)
+        rgba = gx_texture.decode(fmt, width, height, payload, palette)
         return cls(fmt, width, height, max(mipmaps, 1), rgba)
 
     def describe(self) -> str:

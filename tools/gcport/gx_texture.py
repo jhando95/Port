@@ -15,7 +15,10 @@ Formats (GX enum values):
   14 CMPR   8x8 tiles of four DXT1-style 4x4 sub-blocks (BE colors,
             MSB-first index bits)
 
-Palette formats (C4/C8/C14X2) are not implemented yet.
+Paletted (indexed) formats, which index a TLUT of IA8/RGB565/RGB5A3 entries:
+  8  C4     8x8 tiles, 4bpp index
+  9  C8     8x4 tiles, 8bpp index
+  10 C14X2  4x4 tiles, 16bpp value, low 14 bits index
 """
 
 from __future__ import annotations
@@ -37,10 +40,19 @@ TILE_SPECS = {
     4: (4, 4, 32),
     5: (4, 4, 32),
     6: (4, 4, 64),
+    8: (8, 8, 32),   # C4  (4-bit palette index)
+    9: (8, 4, 32),   # C8  (8-bit palette index)
+    10: (4, 4, 32),  # C14X2 (14-bit palette index)
     14: (8, 8, 32),
 }
 
 ENCODABLE = {0, 1, 2, 3, 4, 5, 6}
+# Formats that index into a color lookup table (palette / TLUT).
+PALETTED = {8, 9, 10}
+# Palette (TLUT) entry formats.
+PALETTE_IA8 = 0
+PALETTE_RGB565 = 1
+PALETTE_RGB5A3 = 2
 
 
 def _expand5(v: int) -> int:
@@ -70,11 +82,44 @@ def encoded_size(fmt: int, width: int, height: int) -> int:
     return tiles_x * tiles_y * tbytes
 
 
-def decode(fmt: int, width: int, height: int, data: bytes) -> bytes:
-    """Decode texture data to RGBA8888 (row-major, 4 bytes/pixel)."""
+def _decode_palette_entry(value: int, palette_format: int) -> tuple[int, int, int, int]:
+    if palette_format == PALETTE_IA8:
+        a, i = value >> 8, value & 0xFF
+        return i, i, i, a
+    if palette_format == PALETTE_RGB565:
+        return (*_rgb565(value), 255)
+    if palette_format == PALETTE_RGB5A3:
+        if value & 0x8000:
+            return (_expand5(value >> 10 & 0x1F), _expand5(value >> 5 & 0x1F),
+                    _expand5(value & 0x1F), 255)
+        return (_expand4(value >> 8 & 0xF), _expand4(value >> 4 & 0xF),
+                _expand4(value & 0xF), _expand3(value >> 12 & 0x7))
+    raise ValueError(f"unsupported palette format {palette_format}")
+
+
+def decode_palette(data: bytes, palette_format: int,
+                   count: int) -> list[tuple[int, int, int, int]]:
+    """Decode a TLUT: `count` 16-bit big-endian entries -> RGBA tuples."""
+    if len(data) < count * 2:
+        raise ValueError("palette data truncated")
+    return [_decode_palette_entry(
+                struct.unpack(">H", data[i * 2:i * 2 + 2])[0], palette_format)
+            for i in range(count)]
+
+
+def decode(fmt: int, width: int, height: int, data: bytes,
+           palette: list[tuple[int, int, int, int]] | None = None) -> bytes:
+    """Decode texture data to RGBA8888 (row-major, 4 bytes/pixel).
+
+    Indexed formats (C4/C8/C14X2) require `palette`, a list of RGBA tuples
+    decoded from the texture's TLUT (see decode_palette).
+    """
     if fmt not in TILE_SPECS:
         name = FORMAT_NAMES.get(fmt, str(fmt))
         raise ValueError(f"unsupported texture format {name}")
+    if fmt in PALETTED and palette is None:
+        raise ValueError(
+            f"format {FORMAT_NAMES.get(fmt, fmt)} is paletted; palette required")
     tw, th, tbytes = TILE_SPECS[fmt]
     if len(data) < encoded_size(fmt, width, height):
         raise ValueError("texture data truncated")
@@ -171,6 +216,23 @@ def decode(fmt: int, width: int, height: int, data: bytes) -> bytes:
                             shift = 30 - (py * 4 + px) * 2  # MSB-first
                             r, g, b, a = p[indices >> shift & 0x3]
                             put(ox + sx + px, oy + sy + py, r, g, b, a)
+            elif fmt == 8:  # C4 (4-bit palette index), 8x8 tiles
+                for py in range(8):
+                    for px in range(8):
+                        ni = py * 8 + px
+                        byte = tile[ni // 2]
+                        idx = byte >> 4 if ni % 2 == 0 else byte & 0xF
+                        put(ox + px, oy + py, *palette[idx])
+            elif fmt == 9:  # C8 (8-bit palette index), 8x4 tiles
+                for py in range(4):
+                    for px in range(8):
+                        put(ox + px, oy + py, *palette[tile[py * 8 + px]])
+            elif fmt == 10:  # C14X2 (14-bit palette index), 4x4 tiles
+                for py in range(4):
+                    for px in range(4):
+                        off = (py * 4 + px) * 2
+                        (value,) = struct.unpack(">H", tile[off : off + 2])
+                        put(ox + px, oy + py, *palette[value & 0x3FFF])
     return bytes(out)
 
 

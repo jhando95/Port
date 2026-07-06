@@ -137,5 +137,8 @@ boundaries (hook tables), same model N64Recomp ports use.
 - **Yaz0**: RLE/LZ back-reference scheme, magic `Yaz0`, used to compress many
   first-party archives (`.szs`).
 - **RARC/ARC** (Nintendo archive format used heavily by MKDD): implemented in
-  `gcport.rarc` from community documentation, round-trip tested. Still to be
-  verified against a retail archive once a user-supplied dump is available.
+  `gcport.rarc` from community documentation. **Validated against a retail
+  Mario Kart: Double Dash!! dump — all 79 archives parsed, 0 failures.**
+- **BTI textures**: all common formats plus the paletted C4/C8/C14X2 (added
+  after a real dump surfaced C8 character-banner textures). Validated against
+  the same retail dump — 830/830 textures parse.

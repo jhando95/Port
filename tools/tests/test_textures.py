@@ -127,7 +127,70 @@ def test_bti_roundtrip():
 
 def test_bti_rejects_unknown_format():
     header = bytearray(bti.HEADER_SIZE)
-    header[0] = 9  # C8, palette format, unimplemented
+    header[0] = 7  # not a real GX texture format
     header[2:6] = struct.pack(">HH", 4, 4)
     with pytest.raises(ValueError):
         bti.Bti.parse(bytes(header))
+
+
+def _make_paletted_bti(fmt, width, height, palette565, index_bytes):
+    """Build a BTI with an RGB565 palette and raw index data (for tests)."""
+    palette = b"".join(struct.pack(">H", v) for v in palette565)
+    header = bytearray(bti.HEADER_SIZE)
+    header[0] = fmt
+    struct.pack_into(">HH", header, 2, width, height)
+    header[0x09] = gx_texture.PALETTE_RGB565
+    struct.pack_into(">H", header, 0x0A, len(palette565))    # palette count
+    struct.pack_into(">I", header, 0x0C, bti.HEADER_SIZE)    # palette offset
+    header[0x18] = 1                                          # 1 mipmap
+    image_off = bti.HEADER_SIZE + len(palette)
+    struct.pack_into(">I", header, 0x1C, image_off)          # image offset
+    return bytes(header) + palette + bytes(index_bytes)
+
+
+def test_c8_palette_decode():
+    # palette: 0=red, 1=green, 2=blue; 8x4 = one C8 tile, indices per pixel
+    palette = [0xF800, 0x07E0, 0x001F]
+    indices = [(x + y) % 3 for y in range(4) for x in range(8)]
+    blob = _make_paletted_bti(9, 8, 4, palette, indices)
+    tex = bti.Bti.parse(blob)
+    assert (tex.format, tex.width, tex.height) == (9, 8, 4)
+    assert tex.rgba[0:4] == bytes((255, 0, 0, 255))   # pixel(0,0) index 0 red
+    assert tex.rgba[4:8] == bytes((0, 255, 0, 255))   # pixel(1,0) index 1 green
+    assert tex.rgba[8:12] == bytes((0, 0, 255, 255))  # pixel(2,0) index 2 blue
+
+
+def test_c4_palette_decode():
+    # C4: 8x8 tile, 4-bit indices packed two per byte (high nibble first)
+    palette = [0xF800, 0x07E0]  # red, green
+    # 64 indices alternating 0,1,0,1...
+    idx = [(x + y) % 2 for y in range(8) for x in range(8)]
+    packed = bytes((idx[i] << 4) | idx[i + 1] for i in range(0, 64, 2))
+    blob = _make_paletted_bti(8, 8, 8, palette, packed)
+    tex = bti.Bti.parse(blob)
+    assert tex.rgba[0:4] == bytes((255, 0, 0, 255))   # index 0 red
+    assert tex.rgba[4:8] == bytes((0, 255, 0, 255))   # index 1 green
+
+
+def test_c14x2_palette_decode():
+    # C14X2: 4x4 tile, 16-bit values, low 14 bits index the palette
+    palette = [0] * 5
+    palette[3] = 0x001F  # blue at index 3
+    values = [3] + [0] * 15  # first pixel -> index 3
+    data = b"".join(struct.pack(">H", v) for v in values)
+    blob = _make_paletted_bti(10, 4, 4, palette, data)
+    tex = bti.Bti.parse(blob)
+    assert tex.rgba[0:4] == bytes((0, 0, 255, 255))   # blue
+
+
+def test_paletted_requires_palette():
+    # decoding an indexed format without a palette is an error, not a crash
+    with pytest.raises(ValueError):
+        gx_texture.decode(9, 8, 4, bytes(32))
+
+
+def test_palette_entry_formats():
+    # IA8 entry: high byte alpha, low byte intensity
+    pal = gx_texture.decode_palette(struct.pack(">H", 0x80FF),
+                                    gx_texture.PALETTE_IA8, 1)
+    assert pal[0] == (255, 255, 255, 128)
